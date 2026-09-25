@@ -125,6 +125,14 @@ counts as not set.
 
 ## Watching it
 
+Before any bot loads, the settings everything depends on are checked and
+the database is tried once. A problem there — a missing or example
+`DATABASE_URL`, a host that does not exist, a refused password, an
+`ADMIN_ID` given as a username, a token pasted in quotes — stops the start
+with one line naming it, `Not starting: ...`, rather than a traceback per
+bot. Warnings and errors are written to stderr, which is how hosts such as
+Railway tell them apart from ordinary lines.
+
 Every line of the log names the bot it came from, including the lines
 written by python-telegram-bot and psycopg on a bot's behalf:
 

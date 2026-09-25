@@ -75,6 +75,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -83,6 +84,7 @@ from collections.abc import MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
 
@@ -230,6 +232,8 @@ def setting(bot: Bot, key: str) -> str | None:
         value = env.get(key) or own.get(key)
         if not value and key == f"{bot.prefix}_ADMIN_ID":
             value = env.get("ADMIN_ID") or own.get("ADMIN_ID")
+        if value and key == f"{bot.prefix}_USERNAME":
+            value = value.strip().lstrip("@")   # "@my_bot" and "my_bot" both mean the bot
         return value or None
 
     if key not in NOT_OVERRIDES:
@@ -495,17 +499,122 @@ def adopting_handlers(bot: Bot):
 
 
 def setup_logging() -> None:
+    """Information to stdout, warnings and errors to stderr: hosts like
+    Railway mark a line's level by the stream it came on, so this is what
+    makes an error show as an error in their log viewer."""
     _install_log_tagging()
-    console = logging.StreamHandler(sys.stdout)
-    console.setFormatter(logging.Formatter(_FORMAT))
+    formatter = logging.Formatter(_FORMAT)
+    ordinary = logging.StreamHandler(sys.stdout)
+    ordinary.addFilter(lambda record: record.levelno < logging.WARNING)
+    alarming = logging.StreamHandler(sys.stderr)
+    alarming.setLevel(logging.WARNING)
     root = logging.getLogger()
-    root.addHandler(console)
+    for handler in (ordinary, alarming):
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
     root.setLevel(logging.INFO)
     for noisy in ("httpx", "httpcore", "telegram.ext.Updater", "apscheduler"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     # Python's own warnings (python-telegram-bot has a few at startup) into
     # the same log, attributed like everything else, instead of raw stderr.
     logging.captureWarnings(True)
+
+
+# ---------------------------------------------------------------------------
+# Before anything loads: can this configuration work at all?
+# ---------------------------------------------------------------------------
+# Every bot connects to the database while it loads, so a wrong DATABASE_URL
+# fails all five the same way, five tracebacks deep, and the line that says
+# why is buried under them. The settings everything depends on are checked
+# once, first, and a problem is said in one sentence. Nothing here prints a
+# password: only the host of a connection string is ever shown.
+
+PLACEHOLDER = re.compile(r"<[^<>\s]*>")
+# How long a database that is not answering (as opposed to one that cannot
+# exist, or refused the password) is waited for before giving up.
+DB_WAIT_SECONDS = float(os.environ.get("UNIFIED_DB_WAIT_SECONDS") or 120)
+
+
+def _where(dsn: str) -> str:
+    try:
+        parts = urlsplit(dsn)
+        return f"{parts.hostname or '?'}:{parts.port or 5432}"
+    except ValueError:
+        return "?"
+
+
+def _database_problem(dsn: str) -> str | None:
+    """None when the database answers; otherwise why not, in a sentence."""
+    import psycopg
+
+    where = _where(dsn)
+    deadline = time.monotonic() + DB_WAIT_SECONDS
+    while True:
+        try:
+            with psycopg.connect(dsn, connect_timeout=10) as connection:
+                connection.execute("SELECT 1")
+            return None
+        except Exception as exc:
+            first = (str(exc).strip().splitlines() or [type(exc).__name__])[0]
+            said = first.lower()
+            if "resolve host" in said or "name or service not known" in said or "nodename nor servname" in said:
+                return (f"the database host in DATABASE_URL does not exist ({where}). "
+                        f"The connection string was cut short or mistyped.")
+            if "password authentication failed" in said:
+                return (f"the database at {where} refused the password in DATABASE_URL. "
+                        f"Characters like @ : / ? # and spaces in a password have to be "
+                        f"percent-encoded (@ is %40).")
+            if "tenant or user not found" in said:
+                return (f"the pooler at {where} does not know the user in DATABASE_URL. "
+                        f"Supabase's pooler wants postgres.<project ref> as the user.")
+            if time.monotonic() >= deadline:
+                return f"the database at {where} has not answered for {DB_WAIT_SECONDS:.0f}s ({first})."
+            log.warning("The database at %s is not answering yet (%s) -- trying again in 10s.", where, first)
+            time.sleep(10)
+
+
+def preflight(bots: list[Bot]) -> str | None:
+    """Everything wrong with the settings these bots depend on, or None."""
+    problems: list[str] = []
+
+    def problem(text):
+        if text not in problems:
+            problems.append(text)
+
+    for bot in bots:
+        for key in (f"{bot.prefix}_TOKEN", f"{bot.prefix}_USERNAME", f"{bot.prefix}_ADMIN_ID"):
+            value = setting(bot, key) or ""
+            name = "ADMIN_ID" if key.endswith("_ADMIN_ID") and not (
+                os.environ.get(key) or bot.dotenv.get(key)) else key
+            if PLACEHOLDER.search(value):
+                problem(f"{name} still holds an example value from .env.example")
+            elif value and (value != value.strip() or value[0] in "\"'"):
+                problem(f"{name} has spaces or quotes around it")
+        admins = setting(bot, f"{bot.prefix}_ADMIN_ID")
+        if admins and not PLACEHOLDER.search(admins) and not all(
+                part.strip().isdigit() for part in admins.split(",") if part.strip()):
+            problem("ADMIN_ID must be numeric Telegram user ids, comma-separated -- "
+                    "not usernames (@userinfobot shows the number)")
+
+    urls = {setting(bot, "DATABASE_URL") for bot in bots}
+    if None in urls:
+        problem("DATABASE_URL is not set. Nothing runs without it: the Supabase connection "
+                "string, from Project Settings -> Database -> Session pooler (port 5432)")
+    for dsn in sorted(url for url in urls if url):
+        if PLACEHOLDER.search(dsn):
+            problem("DATABASE_URL is still the example from .env.example -- <ref>, <password> "
+                    "and <region> are meant to be replaced. Paste the real one from Supabase: "
+                    "Project Settings -> Database -> Session pooler (port 5432)")
+        elif not dsn.startswith(("postgresql://", "postgres://")):
+            problem("DATABASE_URL should start with postgresql://")
+    if problems:
+        return "; ".join(problems) + "."
+
+    for dsn in sorted(url for url in urls if url):
+        found = _database_problem(dsn)
+        if found:
+            return found[0].upper() + found[1:]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +704,7 @@ def load(bot: Bot, wire: bool = True) -> bool:
         log.warning("%s is not running: %s", bot.name, exc)
     except Exception as exc:
         bot.state, bot.problem = "failed", f"{type(exc).__name__}: {exc}"
-        log.exception("%s could not be loaded -- the others carry on without it", bot.name)
+        log.exception("%s could not be loaded", bot.name)
     finally:
         _CURRENT.reset(token)
     forget(bot)
@@ -1044,28 +1153,38 @@ def main(argv: list[str]) -> int:
     if "--check" in flags:
         return check(bots)
 
-    family_holder: list[Family] = []
-    patch_python_telegram_bot(family_holder)
     log.info("Bot family %s, one process: %s", version, ", ".join(bot.name for bot in bots))
     tokens: dict[str, Bot] = {}
-    runnable = []
+    wanted = []
     for bot in bots:
         if not bot.token_set():
             bot.state, bot.problem = "skipped", f"no {bot.prefix}_TOKEN"
             log.info("%s skipped: %s is not set.", bot.name, f"{bot.prefix}_TOKEN")
             continue
         token = setting(bot, f"{bot.prefix}_TOKEN")
-        if token and token in tokens:
+        if token in tokens:
             bot.state, bot.problem = "skipped", f"same token as {tokens[token].name}"
             log.error("%s skipped: it has the same token as %s, and two pollers on one "
                       "token split its updates between them.", bot.name, tokens[token].name)
             continue
-        if token:
-            tokens[token] = bot
-        if load(bot):
-            runnable.append(bot)
+        tokens[token] = bot
+        wanted.append(bot)
+    if not wanted:
+        log.error("Nothing to run: no bot has a token. Set at least one of %s.",
+                  ", ".join(f"{bot.prefix}_TOKEN" for bot in bots))
+        return 1
+
+    problem = preflight(wanted)
+    if problem:
+        log.error("Not starting: %s", problem)
+        return 1
+
+    family_holder: list[Family] = []
+    patch_python_telegram_bot(family_holder)
+    runnable = [bot for bot in wanted if load(bot)]
     if not runnable:
-        log.error("Nothing to run. Each bot needs its token, e.g. SBOT_TOKEN for StickerBot.")
+        reasons = sorted({bot.problem for bot in wanted if bot.problem})
+        log.error("No bot could be loaded: %s", " / ".join(reasons) or "see the errors above")
         return 1
     one_memory_reporter(runnable)
 
