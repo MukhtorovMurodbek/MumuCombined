@@ -1803,10 +1803,10 @@ async def reports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                    max(1, min(limit, 50)), shared_only)
     if not rows:
         await update.message.reply_text(
-            "Nobody has attached their details to a problem yet." if shared_only
+            "Nobody has sent a report on a problem yet." if shared_only
             else "No problems recorded yet.")
         return
-    lines = ["🐞 " + ("Problems somebody put their name to" if shared_only
+    lines = ["🐞 " + ("Problems somebody sent a report on" if shared_only
                       else "Latest problems, whether reported or not"), ""]
     for row in rows:
         problem = problems.PROBLEMS.get(row["code"])
@@ -1817,7 +1817,7 @@ async def reports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      f"{row['code']}{seen} ({row['incident']}) — "
                      f"{problem.title if problem else 'unknown code'}")
     lines += ["", "🚨 urgent (messaged when it happened) · ⚠️ fault · • refused",
-              "🙋 somebody attached their own details — /report <incident>",
+              "🙋 somebody sent a report — /report <incident>",
               "What a code means: /decode <code>",
               f"The last {NIGHTLY_REPORT_HOURS}h, laid out: /nightly"]
     await send_long(context, update.effective_chat.id, "\n".join(lines), "reports.txt")
@@ -1860,15 +1860,36 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"Shown {row['seen']} times")
     lines.append("")
     if row.get("shared_at"):
-        who = f"id {row['user_id']}"
-        if row.get("username"):
-            who += f" (@{html.escape(str(row['username']))})"
-        lines += [f"🙋 <b>Sent by</b> {who}",
-                  f"Language {html.escape(str(row.get('user_lang') or '?'))} · "
-                  f"{html.escape(str(row.get('chat_kind') or '?'))} chat · "
-                  f"attached {row['shared_at']:%Y-%m-%d %H:%M} UTC", ""]
+        lines.append(f"🙋 <b>Reported</b> {row['shared_at']:%Y-%m-%d %H:%M} UTC · "
+                     f"language {html.escape(str(row.get('user_lang') or '?'))} · "
+                     f"{html.escape(str(row.get('chat_kind') or '?'))} chat")
+        details = row.get("details") or {}
+        if isinstance(details, str):
+            try:
+                details = json.loads(details)
+            except ValueError:
+                details = {}
+        if details.get("site"):
+            lines.append(f"Site: {html.escape(str(details['site']))}")
+        if details.get("link"):
+            lines.append(f"Link: {html.escape(str(details['link']))}")
+        routes = details.get("routes") or []
+        if routes:
+            lines.append("Routes:")
+            lines += [f"  • {html.escape(str(route))}" for route in routes]
+        if row.get("comment"):
+            lines.append(f"💬 <i>{html.escape(str(row['comment']))}</i>")
+        if row.get("user_id"):
+            # Only there because they turned on "let the owner reply".
+            who = f'<a href="tg://user?id={int(row["user_id"])}">id {int(row["user_id"])}</a>'
+            if row.get("username"):
+                who += f" (@{html.escape(str(row['username']))})"
+            lines.append(f"↩️ Asked for a reply: {who}")
+        else:
+            lines.append("Did not ask for a reply — nothing here identifies them.")
+        lines.append("")
     else:
-        lines += ["Nobody attached their details to this one — it was recorded "
+        lines += ["Nobody sent a report on this one — it was recorded "
                   "automatically, and holds nothing about who hit it.", ""]
     lines.append(html.escape(problems.decode(row["code"])))
     text = "\n".join(lines)
@@ -1974,7 +1995,7 @@ def build_problem_report(rows: list, hours: int) -> str:
 
     if signed:
         incidents = ", ".join(f"<code>{html.escape(row['incident'])}</code>" for row in signed[:8])
-        lines.append(f"\n🙋 <b>{len(signed)} attached their own details</b>: {incidents}"
+        lines.append(f"\n🙋 <b>{len(signed)} sent a report</b>: {incidents}"
                      f"\n  <code>/report &lt;incident&gt;</code> to see what they sent.")
 
     lines.append("\n<code>/reports</code> for the longer history, "

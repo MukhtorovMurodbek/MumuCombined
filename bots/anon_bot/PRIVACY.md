@@ -45,25 +45,30 @@ _Last reviewed: 10 September 2026._
   down automatically, because a fault nobody reports is still a fault, and
   nothing in it is about you: not your ID, not your name, not what you sent.
   The message that carries the code says so, above the button.
-- **Your own details, only if you add them** — tapping "Add my details" under
-  an error offers to attach four things to that incident: your Telegram user
-  ID, your @username if you have one, the language you picked, and whether the
-  chat is private or a group. All four are named on screen before anything is
-  sent, and nothing is sent unless you tap Send. Not what you wrote and not
-  the file you sent, ever.
+- **A report, only if you send one** — tapping "Report this" under an error
+  shows, on screen, exactly what the report would carry, and nothing is sent
+  unless you tap Send. It carries only what is related to that error:
+  In this bot that is never anything you or anybody else wrote in a
+  conversation.
+  Plus the language the bot speaks to you in, whether the chat is private or a
+  group, and a comment if you choose to write one. Never your name or your
+  @username. Your Telegram user ID goes only if you turn on "Let the owner
+  reply to me" — without it, the report is not linked to your account.
 
-  Those four are **cleared after 30 days**, automatically, whether or not you
+  All of it is **cleared after 30 days**, automatically, whether or not you
   ask. The record of the error itself stays — it still happened, and a count
-  of it is not about anybody — but after a month it no longer says who hit it.
-  `/deletemydata` clears them straight away instead of waiting.
+  of it is not about anybody — but after a month it no longer carries
+  anything you sent. `/deletemydata` clears straight away any report that has
+  your user ID on it; one sent without it cannot be told apart from anybody
+  else's, so the 30-day clock clears it instead.
 
   The error records themselves are kept for **180 days** and then deleted.
 
   One more thing worth saying plainly: the operator is messaged the moment a
   serious error happens — a crash, or a message this bot accepted and failed
   to deliver — so those are seen the same day rather than in a list. That
-  message says which error and when. It does not say who, even when somebody
-  has attached their details; the operator has to look those up deliberately.
+  message says which error and when. It does not say who, or what a report
+  says; the operator has to look a report up deliberately.
 
 ## What is not held
 

@@ -682,6 +682,169 @@ async def _pin_og(url: str) -> Resolved:
 
 
 # ---------------------------------------------------------------------------
+# cobalt, for the platforms with nothing else
+# ---------------------------------------------------------------------------
+# cobalt (github.com/imputnet/cobalt) is an open-source downloader whose whole
+# product is an API: POST a link, get back a URL that serves the file. The
+# official instance wants a Turnstile token, but the project is built to be
+# self-hosted, and a number of people run public instances that answer
+# without one. Like the embed-fixers above, the fetching happens from *their*
+# address -- and the file comes back through their `/tunnel`, so the second
+# request never touches YouTube's CDN from this container either.
+#
+# Added at 1.7.1 for YouTube, which until then had yt-dlp and nothing else.
+# That was fine for as long as the server's address was not flagged, and it
+# stopped being fine without any change on this side: a redeploy landed on an
+# address YouTube challenges, every short came back "sign in to confirm
+# you're not a bot", and a link that downloaded the day before was DL-BLOCKED.
+# With cobalt ahead of it, yt-dlp becomes what it is everywhere else -- the
+# last resort, and the route that gets better if cookies or a proxy are set.
+#
+# Several instances rather than one, for the reason the file exists: any one
+# of them is somebody's hobby server. They are tried in order inside this
+# one provider, and whichever answered last goes first next time, so a dead
+# instance costs one request per restart rather than one per download. To use
+# an instance of your own, put it first in DBOT_COBALT_INSTANCES and its key in
+# DBOT_COBALT_API_KEY (sent to that first instance only -- a key is a secret,
+# and every other instance on the list is a stranger).
+
+COBALT_INSTANCES = [
+    host.strip().rstrip("/") for host in os.environ.get(
+        "DBOT_COBALT_INSTANCES",
+        "https://api.cobalt.liubquanti.click,https://cobaltapi.cjs.nz,https://dwnld.nichind.dev",
+    ).split(",") if host.strip()
+]
+COBALT_API_KEY = os.environ.get("DBOT_COBALT_API_KEY") or None
+# 720p rather than "max": the bot sends through the cloud Bot API's 50 MB, and
+# a 1080p minute of video is most of that on its own.
+COBALT_QUALITY = os.environ.get("DBOT_COBALT_QUALITY", "720")
+# Per instance. Several of them fit inside PROVIDER_TIMEOUT_S that way, and an
+# instance that has not answered in this long is not going to.
+COBALT_INSTANCE_TIMEOUT_S = float(os.environ.get("DBOT_COBALT_INSTANCE_TIMEOUT", "10"))
+
+# cobalt's error codes, sorted into the verdicts the chain understands. The
+# codes are namespaced ("error.api.content.video.unavailable",
+# "error.api.youtube.login"), so these match on parts rather than whole codes
+# -- new codes under a known namespace land in the right bucket unaided.
+_COBALT_MISSING = ("content.video.unavailable", "content.post.unavailable",
+                   "content.video.private", "content.post.private",
+                   "content.video.age", "content.post.age", "link.invalid",
+                   "link.unsupported", "content.video.live")
+_COBALT_TOO_BIG = ("content.too_long", "content.too_large")
+_COBALT_BLOCKED = (".login", "auth.", "fetch.rate", "rate_exceeded",
+                   "content.video.region", "youtube.decipher", "youtube.token",
+                   "no_valid_content", "fetch.critical")
+
+_cobalt_last_good: str | None = None
+
+
+def _cobalt_verdict(code: str) -> str:
+    code = code.lower()
+    if any(part in code for part in _COBALT_MISSING):
+        return "missing"
+    if any(part in code for part in _COBALT_TOO_BIG):
+        return "too_big"
+    if any(part in code for part in _COBALT_BLOCKED):
+        return "blocked"
+    return "error"
+
+
+def _cobalt_items(data: dict, platform: str) -> list[MediaItem]:
+    status = data.get("status")
+    if status in ("tunnel", "redirect", "stream"):
+        name = str(data.get("filename") or "")
+        kind = _kind_of(name) if name else "video"
+        return [MediaItem(kind, url=data["url"],
+                          filename=f"{platform}.{_ext_of(name, 'mp4' if kind == 'video' else 'jpg')}")]
+    if status == "picker":
+        items = []
+        for entry in data.get("picker") or []:
+            url = entry.get("url")
+            if not url:
+                continue
+            # "gif" is a short muted mp4 in cobalt's vocabulary, which is a
+            # video to Telegram.
+            kind = "photo" if entry.get("type") == "photo" else "video"
+            items.append(MediaItem(kind, url=url,
+                                   filename=f"{platform}.{'jpg' if kind == 'photo' else 'mp4'}"))
+        return items
+    if status == "local-processing":
+        # Newer instances can hand back separate streams for the client to
+        # merge. One stream is already a whole file; several would need
+        # ffmpeg here, which is what yt-dlp is further down the chain for.
+        tunnels = data.get("tunnel") or []
+        if len(tunnels) == 1:
+            return [MediaItem("video", url=tunnels[0], filename=f"{platform}.mp4")]
+    return []
+
+
+async def _cobalt_one(host: str, url: str, platform: str, key: str | None) -> Resolved:
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Api-Key {key}"
+    body = {"url": url, "videoQuality": COBALT_QUALITY, "filenameStyle": "basic"}
+    resp = await net.client().post(host + "/", json=body, headers=headers,
+                                   timeout=COBALT_INSTANCE_TIMEOUT_S)
+    try:
+        data = resp.json()
+    except ValueError:
+        raise ProviderFailed(f"{urlparse(host).netloc} answered HTTP {resp.status_code}, not JSON",
+                             "blocked" if resp.status_code in (401, 403, 429) else "error")
+    if data.get("status") == "error":
+        code = str((data.get("error") or {}).get("code") or "unknown")
+        raise ProviderFailed(f"{urlparse(host).netloc}: {code}", _cobalt_verdict(code))
+    items = _cobalt_items(data, platform)
+    if not items:
+        raise ProviderFailed(f"{urlparse(host).netloc}: nothing usable ({data.get('status')})", "error")
+    if any(i.kind == "video" for i in items) and platform == "youtube":
+        items = [i for i in items if i.kind == "video"]
+    return Resolved(platform, "cobalt", items)
+
+
+def _cobalt_provider(platform: str):
+    async def provider(url: str) -> Resolved:
+        global _cobalt_last_good
+        if not COBALT_INSTANCES:
+            raise ProviderFailed("no cobalt instances configured", "error")
+        hosts = list(COBALT_INSTANCES)
+        if _cobalt_last_good in hosts:
+            hosts.remove(_cobalt_last_good)
+            hosts.insert(0, _cobalt_last_good)
+        failures: list[ProviderFailed] = []
+        for host in hosts:
+            key = COBALT_API_KEY if host == COBALT_INSTANCES[0] else None
+            try:
+                # A hard deadline, not httpx's: its timeout is per read, and
+                # an instance trickling bytes would never trip it.
+                resolved = await asyncio.wait_for(_cobalt_one(host, url, platform, key),
+                                                  timeout=COBALT_INSTANCE_TIMEOUT_S)
+            except ProviderFailed as exc:
+                failures.append(exc)
+                if exc.kind == "too_big":
+                    # The clip itself is the problem; another instance will
+                    # say the same thing about it. "missing" is not trusted
+                    # the same way: an instance YouTube has blocked can
+                    # report a perfectly good video as unavailable.
+                    raise
+                continue
+            except asyncio.TimeoutError:
+                failures.append(ProviderFailed(
+                    f"{urlparse(host).netloc}: no answer in {COBALT_INSTANCE_TIMEOUT_S:.0f}s", "error"))
+                continue
+            except (httpx.HTTPError, KeyError, TypeError) as exc:
+                failures.append(ProviderFailed(
+                    f"{urlparse(host).netloc}: {type(exc).__name__}: {exc}", "error"))
+                continue
+            _cobalt_last_good = host
+            return resolved
+        kinds = {f.kind for f in failures}
+        verdict = ("blocked" if "blocked" in kinds
+                   else "missing" if kinds == {"missing"} else "error")
+        raise ProviderFailed("; ".join(str(f) for f in failures), verdict)
+    return provider
+
+
+# ---------------------------------------------------------------------------
 # yt-dlp, the universal last resort
 # ---------------------------------------------------------------------------
 
@@ -746,7 +909,10 @@ PROVIDERS: dict[str, list[tuple[str, object]]] = {
     "reddit": [
         ("ytdlp:reddit", _ytdlp_provider("reddit")),
     ],
+    # cobalt first: yt-dlp asks YouTube from this container's own address,
+    # which is the address YouTube challenges. See the cobalt section.
     "youtube": [
+        ("cobalt:youtube", _cobalt_provider("youtube")),
         ("ytdlp:youtube", _ytdlp_provider("youtube")),
     ],
 }
@@ -831,6 +997,7 @@ SAMPLES = {
     "tiktok": "https://www.tiktok.com/@scout2015/video/6718335390845095173",
     "twitter": "https://x.com/SpaceX/status/2042988940756480302",
     "pinterest": "https://www.pinterest.com/pin/27725353928390009/",
+    "youtube": "https://www.youtube.com/shorts/W05mCB2bDAU",
 }
 
 PROBE_FETCH_BYTES = 64 * 1024

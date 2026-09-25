@@ -5,9 +5,9 @@ download path, and it is deliberately *last* in every chain. yt-dlp makes the
 request from this container's own address, and a datacenter address is the
 thing Instagram and YouTube object to -- so it is the route most likely to
 come back with a login page, and the only route that gets better the moment
-DBOT_<SITE>_COOKIES_FILE or DBOT_<SITE>_PROXY is set. It is also the only
-route that works for YouTube at all, and the only one that muxes Reddit's
-separate DASH video and audio tracks.
+DBOT_<SITE>_COOKIES_FILE (or DBOT_<SITE>_COOKIES) or DBOT_<SITE>_PROXY is
+set. It is YouTube's fallback behind the public cobalt instances, and the only
+route that muxes Reddit's separate DASH video and audio tracks.
 
 yt-dlp is imported lazily, inside download_video(). Importing it costs
 roughly 30-40 MB of resident memory and a second of startup for its
@@ -16,6 +16,7 @@ anyone pasting a link should not be paying that the whole time. The first
 download pays it once, and it stays loaded from then on.
 """
 import os
+import tempfile
 import uuid
 
 # Telegram itself refuses uploads over 50 MB without a local Bot API server,
@@ -63,6 +64,47 @@ SITE_COOKIEFILES = {
     "twitter": os.environ.get("DBOT_TW_COOKIES_FILE") or None,
     "reddit": os.environ.get("DBOT_RD_COOKIES_FILE") or None,
 }
+
+# The same cookies.txt, pasted into a variable instead of left in a file.
+# A host like Railway has environment variables and no convenient place to
+# put a file, so a path-only setting meant cookies were, in practice, not an
+# option there -- and cookies are the one thing that reliably gets YouTube to
+# stop asking a datacenter address to sign in. The text is written to a file
+# only this process can read, once, the first time a download needs it; the
+# *_COOKIES_FILE settings win where both are set.
+_COOKIE_TEXT_VARS = {"youtube": "DBOT_YT_COOKIES", "instagram": "DBOT_IG_COOKIES",
+                     "tiktok": "DBOT_TT_COOKIES", "twitter": "DBOT_TW_COOKIES",
+                     "reddit": "DBOT_RD_COOKIES", "other": "DBOT_COOKIES"}
+_cookie_text_files: dict = {}
+
+
+def _cookiefile_from_text(site: str) -> "str | None":
+    var = _COOKIE_TEXT_VARS.get(site)
+    text = os.environ.get(var) if var else None
+    if not text or not text.strip():
+        return None
+    path = _cookie_text_files.get(site)
+    if path and os.path.exists(path):
+        return path
+    # Some hosts flatten a pasted multi-line value into one line with literal
+    # "\n" and "\t" in it; yt-dlp would read that as one malformed cookie.
+    if "\\n" in text and "\n" not in text:
+        text = text.replace("\\n", "\n").replace("\\t", "\t")
+    fd, path = tempfile.mkstemp(prefix=f"cookies-{site}-", suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text if text.endswith("\n") else text + "\n")
+    _cookie_text_files[site] = path
+    return path
+
+
+def cookiefile_for(site: str) -> "str | None":
+    """The cookie jar for this site: its own file, its own pasted text, then
+    the every-site file, then the every-site text. None if there is none."""
+    for candidate in (SITE_COOKIEFILES.get(site), _cookiefile_from_text(site),
+                      COOKIEFILE, _cookiefile_from_text("other")):
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
 
 # Where the request goes out from. The reason cookies are not always enough:
 # these sites rate-limit by IP as well as by session, every cloud host's
@@ -217,8 +259,8 @@ def download_video(url: str, out_dir: str) -> str:
         "extractor_args": {"youtube": {"player_client": YT_PLAYER_CLIENTS}},
     }
     site = _site_of(url)
-    cookiefile = SITE_COOKIEFILES.get(site) or COOKIEFILE
-    if cookiefile and os.path.exists(cookiefile):
+    cookiefile = cookiefile_for(site)
+    if cookiefile:
         ydl_opts["cookiefile"] = cookiefile
     proxy = SITE_PROXIES.get(site) or PROXY
     if proxy:

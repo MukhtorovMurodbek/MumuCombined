@@ -268,7 +268,9 @@ PROBLEMS = {
         "DownloaderBot", "The site refused every route",
         "Every provider was refused by the platform: blocked, rate limited, or asked to log in.",
         "The platform limiting the server's IP, expired cookies, or a change on the platform.",
-        "/providers and /probe in ManagerBot show which routes are failing."),
+        "/providers and /probe in ManagerBot show which routes are failing. A report sent from the "
+        "Report button names the link and what each route said. For YouTube the lasting fix is "
+        "DBOT_YT_COOKIES (a throwaway account's cookies.txt) or DBOT_YT_PROXY."),
     "DL-NOT-FOUND": Problem(
         "DownloaderBot", "Post not found",
         "The platform says the post does not exist or is not public.",

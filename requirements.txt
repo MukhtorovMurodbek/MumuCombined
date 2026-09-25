@@ -21,4 +21,4 @@ PyYAML>=6.0
 
 # DownloaderBot
 httpx>=0.27
-yt-dlp>=2024.1
+yt-dlp[default]>=2025.11.12

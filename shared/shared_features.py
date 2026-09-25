@@ -39,6 +39,7 @@ from collections import OrderedDict, deque, namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from telegram import (
     BotCommand, BotCommandScopeAllChatAdministrators, BotCommandScopeAllGroupChats,
@@ -48,7 +49,10 @@ from telegram import (
 )
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter
-from telegram.ext import ApplicationHandlerStop, ConversationHandler, TypeHandler
+from telegram.ext import (
+    ApplicationHandlerStop, CallbackQueryHandler, ConversationHandler, MessageHandler,
+    TypeHandler, filters,
+)
 
 import db
 import family_link
@@ -1694,6 +1698,10 @@ def cancel_items(context, lang: str) -> list[CancelItem]:
         items.append(CancelItem("donation",
                                 i18n.t(lang, "cancel_item_donation"),
                                 i18n.t(lang, "cancel_button_donation")))
+    if context.user_data.get(REPORT_COMMENT_KEY):
+        items.append(CancelItem("report_comment",
+                                i18n.t(lang, "cancel_item_report_comment"),
+                                i18n.t(lang, "cancel_button_report_comment")))
     return items
 
 
@@ -1702,6 +1710,19 @@ def cancel_shared_item(context, lang: str, key: str) -> str | None:
     None if that key is not ours or was not pending after all."""
     if key == "donation" and context.user_data.pop("donate_custom_currency", None):
         return i18n.t(lang, "cancel_item_donation")
+    if key == "report_comment":
+        incident = context.user_data.pop(REPORT_COMMENT_KEY, None)
+        if incident:
+            # The report question stays, with its buttons: only the comment
+            # being typed is stopped. The prompt itself goes with /cancel's
+            # usual release_force_reply.
+            for waiting_key, value in list(_awaiting_comment.items()):
+                if value[1] == incident:
+                    _awaiting_comment.pop(waiting_key, None)
+            for draft_key, draft in _drafts.items():
+                if draft_key[1] == incident:
+                    draft["prompt_id"] = None
+            return i18n.t(lang, "cancel_item_report_comment")
     return None
 
 
@@ -2353,6 +2374,9 @@ async def note_problem(chat_id, message_id, text, kwargs: dict):
         # Every problem, not only the ones somebody chooses to report, and not
         # only the ones that offer a button. Buffered -- see note_occurrence.
         note_occurrence(code, incident, datetime.now(timezone.utc))
+        # Whatever the bot named as related to this problem (problem_details)
+        # goes with this incident, for a Report tap to list.
+        _bind_details(chat_id, incident)
     _remember_incident(chat_id, message_id, code, incident)
     return code, incident, text
 
@@ -2424,31 +2448,140 @@ def attach_problem_reports(application) -> None:
             exc_info=True)
 
 
-async def _send_report_to_owner(bot, code: str, incident: str, occurred_at) -> None:
-    """Somebody attached their own details to a problem.
+# ---------------------------------------------------------------------------
+# What a report carries
+# ---------------------------------------------------------------------------
+# The owner, in 1.7.1, after a DL-BLOCKED report arrived carrying somebody's
+# user ID and @username and nothing about the link that had failed: "Rethink
+# what personal data can a user send. I suggest to make the report button
+# automatic. It chooses which info is related and should be sent, leaving
+# everything else. Maybe allow comments."
+#
+# So a report is now built from the problem outward rather than from the
+# person. The code that shows a problem names what is related to it --
+# problem_details(chat_id, link=..., site=..., routes=...) just before the
+# coded message goes out -- and that is held in memory against the incident.
+# Tapping Report lists exactly those fields, plus the language the message
+# was shown in and the kind of chat, and Send stores exactly what was listed.
+#
+# What is left out is everything else, identity included: no @username at
+# all, and the user ID only if the person turns on "let the owner reply" --
+# the one reason to want it. A comment is optional, typed as a reply.
+#
+# Only fields in REPORT_FIELDS can be attached. A bot passing anything else
+# has it dropped, because a field the disclaimer cannot name is a field the
+# person could not have agreed to.
+
+REPORT_FIELDS = ("link", "site", "routes")
+REPORT_DETAILS_TTL_SECONDS = 24 * 3600
+REPORT_COMMENT_MAX = 500
+_PENDING_DETAILS_SECONDS = 120
+
+# chat_id -> (monotonic time, fields): named by a bot, not yet on a message.
+_pending_details: "OrderedDict[int, tuple]" = OrderedDict()
+# incident -> (monotonic time, fields): on a message, waiting for a tap.
+_incident_details: "OrderedDict[str, tuple]" = OrderedDict()
+
+
+# Query parameters a link keeps in a report. Share links carry tracking in
+# their query -- YouTube's `si`, Instagram's `igsh`, TikTok's sender ids --
+# which can lead back to whoever shared the link, and that is not related to
+# the problem. What identifies the post is in the path everywhere except a
+# YouTube watch link's `v`, so that is the one kept.
+_LINK_KEEPS = {"v"}
+
+
+def _clean_link(url: str) -> str:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    query = urlencode([(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                       if k in _LINK_KEEPS])
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+
+
+def problem_details(chat_id, **fields) -> None:
+    """Name what is related to the problem about to be shown in this chat.
+
+    Call it right before sending the coded message. Nothing is stored
+    anywhere but this process's memory, and nothing leaves it unless the
+    person taps Report and then Send, having seen every field listed."""
+    if chat_id is None:
+        return
+    kept = {}
+    for name, value in fields.items():
+        if name not in REPORT_FIELDS:
+            logging.getLogger(__name__).debug("Report field %r is not one a report can carry", name)
+            continue
+        if value in (None, "", [], ()):
+            continue
+        if isinstance(value, (list, tuple)):
+            value = [str(v)[:300] for v in value][:12]
+        else:
+            value = str(value)[:500]
+        if name == "link":
+            value = _clean_link(value)
+        kept[name] = value
+    if not kept:
+        return
+    _pending_details[chat_id] = (time.monotonic(), kept)
+    _pending_details.move_to_end(chat_id)
+    while len(_pending_details) > 1024:
+        _pending_details.popitem(last=False)
+
+
+def _bind_details(chat_id, incident: str) -> None:
+    """Move what a bot named for this chat onto the incident just shown."""
+    pending = _pending_details.pop(chat_id, None) if chat_id is not None else None
+    if pending is None or incident in _incident_details:
+        return
+    named_at, fields = pending
+    now = time.monotonic()
+    if now - named_at > _PENDING_DETAILS_SECONDS:
+        return
+    _incident_details[incident] = (now, fields)
+    while len(_incident_details) > 2048:
+        _incident_details.popitem(last=False)
+    while _incident_details:
+        oldest = next(iter(_incident_details.values()))
+        if now - oldest[0] <= REPORT_DETAILS_TTL_SECONDS:
+            break
+        _incident_details.popitem(last=False)
+
+
+def details_for(incident: str) -> dict:
+    held = _incident_details.get(incident)
+    if held is None or time.monotonic() - held[0] > REPORT_DETAILS_TTL_SECONDS:
+        return {}
+    return dict(held[1])
+
+
+async def _send_report_to_owner(bot, code: str, incident: str, occurred_at,
+                                with_comment: bool = False) -> None:
+    """Somebody sent a report.
 
     **Urgent problems only.** The owner, in 1.7.0: "If user decides to report
     with additional details, highest level errors should get a new message,
     something like details provided for.., and for others it should be sent
-    along with the daily report." A fault somebody bothered to sign is worth
+    along with the daily report." A fault somebody bothered to report is worth
     reading; it is not worth a notification at four in the morning, and the
     nightly report already lists it with a 🙋 beside it.
 
-    It says that details were attached; it does not say what they are. The
-    owner's standing rule is that nothing a bot pushes at them identifies a
-    user, and somebody consenting to be identified does not repeal it -- what
-    the consent bought is the owner being *able* to look. /report <incident>
-    in ManagerBot is the looking.
+    It says that a report arrived; it does not say what is in it. The owner's
+    standing rule is that nothing a bot pushes at them identifies a user --
+    /report <incident> in ManagerBot is the looking.
     """
     if not problems.urgent(code):
         return
     label = os.environ.get("FAMILY_LABEL") or getattr(family_link, "_display_name", None) \
         or family_link._bot_id or "a bot"
-    text = (f"🙋 Details provided for {incident} — {label}\n"
+    text = (f"🙋 Report sent for {incident} — {label}\n"
             f"Happened {occurred_at:%Y-%m-%d %H:%M} UTC · version {family_link.VERSION}\n\n"
             + problems.decode(code)
-            + f"\n\nSomebody attached their own details to this one. "
-              f"/report {incident} in ManagerBot to see them.")
+            + ("\n\nSomebody sent a report on this one, with a comment. " if with_comment
+               else "\n\nSomebody sent a report on this one. ")
+            + f"/report {incident} in ManagerBot to read it.")
     try:
         await bot.send_message(chat_id=REPORTS_TO, text=text)
         return
@@ -2457,92 +2590,249 @@ async def _send_report_to_owner(bot, code: str, incident: str, occurred_at) -> N
     emit_event("warning", "report", text)
 
 
-# One open "shall I send your details?" question per problem per chat. Two taps
-# on the same Report button used to put two of them in the chat, and answering
-# one left the other sitting there still offering to send -- which reads, a
+# One open report question per problem per chat, and what it holds so far.
+# Two taps on the same Report button used to put two questions in the chat,
+# and answering one left the other still offering to send -- which reads, a
 # minute later, as the bot having sent the report on its own.
-_open_dialogs: "OrderedDict[tuple, int]" = OrderedDict()
+_drafts: "OrderedDict[tuple, dict]" = OrderedDict()
+# (chat_id, user_id) -> (chat_id, incident): whose next message is a comment.
+_awaiting_comment: "OrderedDict[tuple, tuple]" = OrderedDict()
+REPORT_COMMENT_KEY = "report_comment_for"
 
 
-def _remember_dialog(chat_id, incident: str, message_id: int) -> None:
-    _open_dialogs[(chat_id, incident)] = message_id
-    _open_dialogs.move_to_end((chat_id, incident))
-    while len(_open_dialogs) > 512:
-        _open_dialogs.popitem(last=False)
+def _draft(chat_id, code: str, incident: str, stamp: int) -> dict:
+    key = (chat_id, incident)
+    draft = _drafts.get(key)
+    if draft is None:
+        draft = {"code": code, "incident": incident, "stamp": stamp,
+                 "comment": None, "contact": False, "message_id": None, "prompt_id": None}
+        _drafts[key] = draft
+    _drafts.move_to_end(key)
+    while len(_drafts) > 512:
+        _drafts.popitem(last=False)
+    return draft
 
 
-async def _close_open_dialog(bot, chat_id, incident: str) -> None:
-    message_id = _open_dialogs.pop((chat_id, incident), None)
-    if message_id is None:
+def _short(value: str, limit: int = 80) -> str:
+    value = " ".join(str(value).split())
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+def _report_text(lang: str, draft: dict, chat_kind) -> str:
+    details = details_for(draft["incident"])
+    lines = []
+    if details.get("link"):
+        lines.append(i18n.t(lang, "report_field_link", value=_short(details["link"])))
+    if details.get("site"):
+        lines.append(i18n.t(lang, "report_field_site", value=details["site"]))
+    if details.get("routes"):
+        lines.append(i18n.t(lang, "report_field_routes"))
+    lines.append(i18n.t(lang, "report_field_lang", value=lang))
+    lines.append(i18n.t(lang, "report_field_chat_group" if chat_kind in ("group", "supergroup")
+                        else "report_field_chat_private"))
+    if draft.get("comment"):
+        lines.append(i18n.t(lang, "report_field_comment", value=_short(draft["comment"], 200)))
+    if draft.get("contact"):
+        lines.append(i18n.t(lang, "report_field_contact"))
+    return (i18n.t(lang, "report_disclaimer", code=draft["code"], incident=draft["incident"])
+            + "\n\n" + "\n".join(f"• {line}" for line in lines)
+            + "\n\n" + i18n.t(lang, "report_leaves_out"))
+
+
+def _report_keyboard(lang: str, draft: dict) -> InlineKeyboardMarkup:
+    tail = f"{draft['code']}:{draft['incident']}:{draft['stamp']}"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(i18n.t(lang, "report_send"), callback_data=f"rpts:{tail}")],
+        [InlineKeyboardButton(i18n.t(lang, "report_comment_edit" if draft.get("comment")
+                                     else "report_comment_add"), callback_data=f"rptm:{tail}")],
+        [InlineKeyboardButton(i18n.t(lang, "report_contact_on" if draft.get("contact")
+                                     else "report_contact_off"), callback_data=f"rptk:{tail}")],
+        [InlineKeyboardButton(i18n.t(lang, "report_cancel"), callback_data="rptc")],
+    ])
+
+
+async def _show_draft(bot, chat_id, lang: str, draft: dict, chat_kind, message=None,
+                      fresh: bool = False) -> None:
+    """Draw the question: in place when it is the message just tapped, or as a
+    new message at the bottom with the old one taken down."""
+    text = _report_text(lang, draft, chat_kind)
+    keyboard = _report_keyboard(lang, draft)
+    if message is not None and not fresh:
+        live = await live_message.edit_in_place(message, bot, text, reply_markup=keyboard)
+        draft["message_id"] = live.message_id
         return
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception:
-        logging.getLogger(__name__).debug("Could not take down an old report question", exc_info=True)
+    if draft.get("message_id"):
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=draft["message_id"])
+        except Exception:
+            logging.getLogger(__name__).debug("Could not take down an old report question", exc_info=True)
+    sent = await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard)
+    draft["message_id"] = getattr(sent, "message_id", None)
+
+
+def _stop_awaiting(chat_id, incident: str, context=None) -> "int | None":
+    """Forget a comment being waited for. Returns the prompt's message id."""
+    for key, value in list(_awaiting_comment.items()):
+        if value == (chat_id, incident):
+            _awaiting_comment.pop(key, None)
+    if context is not None and context.user_data.get(REPORT_COMMENT_KEY) == incident:
+        context.user_data.pop(REPORT_COMMENT_KEY, None)
+        context.user_data.pop(FORCE_REPLY_KEY, None)
+    draft = _drafts.get((chat_id, incident))
+    if draft is None:
+        return None
+    prompt_id, draft["prompt_id"] = draft.get("prompt_id"), None
+    return prompt_id
 
 
 async def problem_report_callback(update, context) -> None:
-    """Report -> what a report sends, with Send and Cancel -> sent, or not."""
+    """Report -> what this problem's report would send, with Send, a comment,
+    the reply switch and Cancel -> sent, or not."""
     query = update.callback_query
     user = update.effective_user
     lang = await i18n.get_lang(user.id, context)
     parts = (query.data or "").split(":")
     action = parts[0]
+    chat = getattr(query.message, "chat", None)
+    chat_id = getattr(chat, "id", None) or user.id
+    chat_kind = getattr(chat, "type", None)
     if action == "rptc":
         await query.answer()
-        chat = getattr(query.message, "chat", None)
-        for key, message_id in list(_open_dialogs.items()):
-            if key[0] == (getattr(chat, "id", None) or user.id) \
-                    and message_id == getattr(query.message, "message_id", None):
-                _open_dialogs.pop(key, None)
+        for key, draft in list(_drafts.items()):
+            if key[0] == chat_id and draft.get("message_id") == getattr(query.message, "message_id", None):
+                prompt_id = _stop_awaiting(chat_id, key[1], context)
+                _drafts.pop(key, None)
+                if prompt_id:
+                    try:
+                        await context.bot.delete_message(chat_id=chat_id, message_id=prompt_id)
+                    except Exception:
+                        pass
         await live_message.edit_in_place(query.message, context.bot, i18n.t(lang, "report_cancelled"))
         return
     code = parts[1] if len(parts) > 1 else ""
     incident = parts[2] if len(parts) > 2 else ""
-    if action not in ("rpt", "rpts") or not problems.is_code(code) or not problems.is_incident(incident):
+    if action not in ("rpt", "rpts", "rptm", "rptk") or not problems.is_code(code) \
+            or not problems.is_incident(incident):
         await query.answer(i18n.t(lang, "report_invalid"), show_alert=True)
         return
-    await query.answer()
-    chat = getattr(query.message, "chat", None)
-    chat_id = getattr(chat, "id", None) or user.id
-    if action == "rpt":
+    stamp = parts[3] if len(parts) > 3 else ""
+    if not stamp.isdigit():
         # When the message with the problem was sent. A message too old for
         # Telegram to hand back has a date of 1970, which is no use to anyone.
         when = getattr(query.message, "date", None)
         if when is None or when.timestamp() <= 0:
             when = datetime.now(timezone.utc)
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton(i18n.t(lang, "report_send"),
-                                 callback_data=f"rpts:{code}:{incident}:{int(when.timestamp())}"),
-            InlineKeyboardButton(i18n.t(lang, "report_cancel"), callback_data="rptc"),
-        ]])
-        # A second tap replaces the first question rather than adding one --
-        # see _open_dialogs. Into the chat the button was in, so it works in a
-        # group as well as in private.
-        await _close_open_dialog(context.bot, chat_id, incident)
-        sent = await context.bot.send_message(
-            chat_id=chat_id, reply_markup=keyboard,
-            text=i18n.t(lang, "report_disclaimer", code=code, incident=incident))
-        _remember_dialog(chat_id, incident, getattr(sent, "message_id", None))
+        stamp = str(int(when.timestamp()))
+    draft = _draft(chat_id, code, incident, int(stamp))
+
+    if action == "rpt":
+        await query.answer()
+        # A second tap replaces the first question rather than adding one.
+        # Into the chat the button was in, so it works in a group as well.
+        await _show_draft(context.bot, chat_id, lang, draft, chat_kind, fresh=True)
         return
-    stamp = parts[3] if len(parts) > 3 else ""
-    occurred_at = (datetime.fromtimestamp(int(stamp), tz=timezone.utc) if stamp.isdigit()
-                   else datetime.now(timezone.utc))
-    _open_dialogs.pop((chat_id, incident), None)
+
+    if action == "rptk":
+        await query.answer()
+        draft["contact"] = not draft.get("contact")
+        await _show_draft(context.bot, chat_id, lang, draft, chat_kind, message=query.message)
+        return
+
+    if action == "rptm":
+        await query.answer()
+        old_prompt = _stop_awaiting(chat_id, incident, context)
+        if old_prompt:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=old_prompt)
+            except Exception:
+                pass
+        prompt = await context.bot.send_message(
+            chat_id=chat_id, text=i18n.t(lang, "report_comment_ask", limit=REPORT_COMMENT_MAX),
+            reply_markup=ForceReply(selective=True))
+        draft["prompt_id"] = getattr(prompt, "message_id", None)
+        _awaiting_comment[(chat_id, user.id)] = (chat_id, incident)
+        while len(_awaiting_comment) > 512:
+            _awaiting_comment.popitem(last=False)
+        context.user_data[REPORT_COMMENT_KEY] = incident
+        remember_force_reply(context, prompt)
+        return
+
+    # rpts -- Send.
+    await query.answer()
+    occurred_at = datetime.fromtimestamp(int(stamp), tz=timezone.utc)
+    prompt_id = _stop_awaiting(chat_id, incident, context)
+    if prompt_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=prompt_id)
+        except Exception:
+            pass
+    _drafts.pop((chat_id, incident), None)
     try:
         new = await asyncio.to_thread(
             family_link.attach_problem_reporter, code, incident, occurred_at,
-            user.id, getattr(user, "username", None), lang,
-            getattr(chat, "type", None), problems.level(code))
+            user.id if draft.get("contact") else None, lang, chat_kind,
+            problems.level(code), details_for(incident) or None, draft.get("comment"))
     except Exception:
         logging.getLogger(__name__).exception("Could not store problem report %s (%s)", incident, code)
         await live_message.edit_in_place(query.message, context.bot, i18n.t(lang, "report_failed"))
         return
     if new:
-        await _send_report_to_owner(context.bot, code, incident, occurred_at)
+        _incident_details.pop(incident, None)
+        await _send_report_to_owner(context.bot, code, incident, occurred_at,
+                                    with_comment=bool(draft.get("comment")))
     await live_message.edit_in_place(
         query.message, context.bot,
         i18n.t(lang, "report_sent" if new else "report_already", incident=incident))
+
+
+class _AwaitingReportComment(filters.MessageFilter):
+    """Matches only a message from somebody whose report is waiting for a
+    comment -- so the handler below never sees anything else, and the bot's
+    own text handling is untouched the rest of the time."""
+
+    def filter(self, message) -> bool:
+        user = getattr(message, "from_user", None)
+        return bool(user) and (message.chat_id, user.id) in _awaiting_comment
+
+
+async def problem_report_comment_received(update, context) -> None:
+    message = update.effective_message
+    user = update.effective_user
+    waiting = _awaiting_comment.pop((message.chat_id, user.id), None)
+    if waiting is None:
+        return
+    chat_id, incident = waiting
+    lang = await i18n.get_lang(user.id, context)
+    context.user_data.pop(REPORT_COMMENT_KEY, None)
+    context.user_data.pop(FORCE_REPLY_KEY, None)
+    draft = _drafts.get((chat_id, incident))
+    if draft is None:
+        await message.reply_text(i18n.t(lang, "report_invalid"))
+        raise ApplicationHandlerStop
+    comment = (message.text or "").strip()[:REPORT_COMMENT_MAX]
+    draft["comment"] = comment or None
+    prompt_id = draft.get("prompt_id")
+    draft["prompt_id"] = None
+    if prompt_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=prompt_id)
+        except Exception:
+            logging.getLogger(__name__).debug("Could not take down the comment prompt", exc_info=True)
+    await _show_draft(context.bot, chat_id, lang, draft, getattr(message.chat, "type", None),
+                      fresh=True)
+    raise ApplicationHandlerStop
+
+
+def add_problem_report_handlers(app) -> None:
+    """The Report button's taps, and the comment somebody types for one.
+
+    The comment handler has a group of its own above the bots' text handling
+    (group -2; the flood gate is -3) and a filter that matches only while a
+    comment is being waited for, so it costs nothing the rest of the time and
+    cannot take a message meant for anything else."""
+    app.add_handler(CallbackQueryHandler(problem_report_callback, pattern=r"^rpt"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & _AwaitingReportComment(),
+                                   problem_report_comment_received), group=-2)
 
 
 async def _tell_about_crash(update, context, incident: str) -> None:

@@ -118,7 +118,7 @@ from shared_features import (
     terms_command,
     paysupport_command,
     attach_problem_reports,
-    problem_report_callback,
+    add_problem_report_handlers,
     attach_flood_gate,
     attach_maintenance,
     refuse_new_work,
@@ -1874,7 +1874,7 @@ def main():
     app.add_handler(CommandHandler("privacy", privacy_command))
     app.add_handler(CommandHandler("terms", terms_command))
     app.add_handler(CommandHandler("paysupport", paysupport_command))
-    app.add_handler(CallbackQueryHandler(problem_report_callback, pattern=r"^rpt"))
+    add_problem_report_handlers(app)
     app.add_handler(CommandHandler("deletemydata", delete_my_data_command))
     app.add_handler(CallbackQueryHandler(delete_my_data_chosen, pattern="^" + ERASE_PREFIX))
     app.add_handler(CommandHandler("mypacks", mypacks_command))

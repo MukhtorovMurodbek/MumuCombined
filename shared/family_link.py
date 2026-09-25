@@ -443,6 +443,17 @@ def init_family_schema() -> None:
         # last month's nightly reports said.
         conn.execute(f"ALTER TABLE {FAMILY_SCHEMA}.problem_reports "
                      f"ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 2")
+        # Added in 1.7.1, when the Report button stopped sending who somebody
+        # is and started sending what went wrong for them. `details` holds
+        # only fields the bot named for that problem -- the link that would
+        # not download, which routes were tried -- and only once the person
+        # has read that list and tapped Send. `comment` is what they chose to
+        # write. `username` is no longer written; `user_id` only when they
+        # turned on "let the owner reply".
+        conn.execute(f"ALTER TABLE {FAMILY_SCHEMA}.problem_reports "
+                     f"ADD COLUMN IF NOT EXISTS details JSONB")
+        conn.execute(f"ALTER TABLE {FAMILY_SCHEMA}.problem_reports "
+                     f"ADD COLUMN IF NOT EXISTS comment TEXT")
         # Everything in the table before 1.7.0 arrived through the Report
         # button, which is what `shared_at` now means. Stamped with the time
         # the report came in, which is the only time those rows carry.
@@ -925,37 +936,47 @@ def record_problem_occurrence(code: str, incident: str, occurred_at, level: int 
 
 
 def attach_problem_reporter(code: str, incident: str, occurred_at,
-                            user_id: int, username: "str | None",
-                            user_lang: "str | None", chat_kind: "str | None",
-                            level: int = 2) -> bool:
-    """Add the details somebody volunteered to their incident's row. True if
-    this is the first time anybody has attached themselves to it.
+                            user_id: "int | None", user_lang: "str | None",
+                            chat_kind: "str | None", level: int = 2,
+                            details: "dict | None" = None,
+                            comment: "str | None" = None) -> bool:
+    """Add what somebody chose to send to their incident's row. True if this
+    is the first time anybody has sent anything for it.
 
     The row usually exists already -- record_problem_occurrence wrote it when
     the problem was shown. The INSERT covers the one case where it does not: a
     bot that could not reach the database at the moment of the failure, which
     is exactly the kind of failure most worth having reported.
 
-    Everything written here was named to the person, on screen, before they
-    tapped Send. Nothing reaches this function any other way.
+    Everything written here was listed to the person, on screen, before they
+    tapped Send: the details the bot picked as related to this problem, their
+    comment if they wrote one, and their user ID only if they asked to be
+    replied to. Nothing reaches this function any other way.
     """
     with _connect() as conn:
         row = conn.execute(
             f"INSERT INTO {FAMILY_SCHEMA}.problem_reports "
             f"(bot_id, code, incident, occurred_at, version, level, shared_at, "
-            f" user_id, username, user_lang, chat_kind) "
-            f"VALUES (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s) "
+            f" user_id, user_lang, chat_kind, details, comment) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s::jsonb, %s) "
             f"ON CONFLICT (bot_id, incident) DO UPDATE "
             f"SET shared_at = now(), user_id = excluded.user_id, "
-            f"    username = excluded.username, user_lang = excluded.user_lang, "
-            f"    chat_kind = excluded.chat_kind "
+            f"    user_lang = excluded.user_lang, chat_kind = excluded.chat_kind, "
+            f"    details = excluded.details, comment = excluded.comment "
             f"WHERE {FAMILY_SCHEMA}.problem_reports.shared_at IS NULL "
             f"RETURNING id",
             (_ledger_bot(), code, incident, occurred_at, VERSION, int(level),
-             user_id, username, user_lang, chat_kind),
+             user_id, user_lang, chat_kind,
+             json.dumps(details, ensure_ascii=False) if details else None,
+             comment or None),
         ).fetchone()
         conn.commit()
     return row is not None
+
+
+_PROBLEM_COLUMNS = ("reported_at, bot_id, code, incident, occurred_at, version, "
+                    "seen, shared_at, user_id, username, user_lang, chat_kind, level, "
+                    "details, comment")
 
 
 def recent_problem_reports(limit: int = 15, shared_only: bool = False) -> list[dict]:
@@ -964,8 +985,7 @@ def recent_problem_reports(limit: int = 15, shared_only: bool = False) -> list[d
     where = " WHERE shared_at IS NOT NULL" if shared_only else ""
     with _connect() as conn:
         rows = conn.execute(
-            f"SELECT reported_at, bot_id, code, incident, occurred_at, version, "
-            f"seen, shared_at, user_id, username, user_lang, chat_kind, level "
+            f"SELECT {_PROBLEM_COLUMNS} "
             f"FROM {FAMILY_SCHEMA}.problem_reports{where} ORDER BY id DESC LIMIT %s",
             (max(1, min(limit, 100)),),
         ).fetchall()
@@ -981,8 +1001,7 @@ def problem_report_by_incident(incident: str) -> "dict | None":
     """
     with _connect() as conn:
         row = conn.execute(
-            f"SELECT reported_at, bot_id, code, incident, occurred_at, version, "
-            f"seen, shared_at, user_id, username, user_lang, chat_kind, level "
+            f"SELECT {_PROBLEM_COLUMNS} "
             f"FROM {FAMILY_SCHEMA}.problem_reports WHERE incident = %s "
             f"ORDER BY id DESC LIMIT 1",
             (incident,),
@@ -994,7 +1013,7 @@ def _problem_row(r) -> dict:
     return {"reported_at": r[0], "bot_id": r[1], "code": r[2], "incident": r[3],
             "occurred_at": r[4], "version": r[5], "seen": r[6], "shared_at": r[7],
             "user_id": r[8], "username": r[9], "user_lang": r[10], "chat_kind": r[11],
-            "level": r[12]}
+            "level": r[12], "details": r[13], "comment": r[14]}
 
 
 def recent_problem_reports_since(hours: int = 24, limit: int = 400) -> list:
@@ -1004,8 +1023,7 @@ def recent_problem_reports_since(hours: int = 24, limit: int = 400) -> list:
     came from."""
     with _connect() as conn:
         rows = conn.execute(
-            f"SELECT reported_at, bot_id, code, incident, occurred_at, version, "
-            f"seen, shared_at, user_id, username, user_lang, chat_kind, level "
+            f"SELECT {_PROBLEM_COLUMNS} "
             f"FROM {FAMILY_SCHEMA}.problem_reports "
             f"WHERE reported_at > now() - make_interval(hours => %s) "
             f"ORDER BY id DESC LIMIT %s",
@@ -1055,8 +1073,11 @@ def prune_problem_reports() -> int:
     with _connect() as conn:
         cleared = conn.execute(
             f"UPDATE {FAMILY_SCHEMA}.problem_reports "
-            f"SET user_id = NULL, username = NULL, user_lang = NULL, chat_kind = NULL "
-            f"WHERE shared_at IS NOT NULL AND user_id IS NOT NULL "
+            f"SET user_id = NULL, username = NULL, user_lang = NULL, chat_kind = NULL, "
+            f"    details = NULL, comment = NULL "
+            f"WHERE shared_at IS NOT NULL "
+            f"AND (user_id IS NOT NULL OR username IS NOT NULL OR details IS NOT NULL "
+            f"     OR comment IS NOT NULL OR user_lang IS NOT NULL) "
             f"AND shared_at < now() - make_interval(days => %s)",
             (PROBLEM_DETAIL_RETENTION_DAYS,),
         ).rowcount or 0
@@ -1079,7 +1100,8 @@ def forget_problem_reporter(user_id: int) -> int:
     with _connect() as conn:
         changed = conn.execute(
             f"UPDATE {FAMILY_SCHEMA}.problem_reports "
-            f"SET user_id = NULL, username = NULL, user_lang = NULL, chat_kind = NULL "
+            f"SET user_id = NULL, username = NULL, user_lang = NULL, chat_kind = NULL, "
+            f"    details = NULL, comment = NULL "
             f"WHERE user_id = %s",
             (user_id,),
         ).rowcount or 0

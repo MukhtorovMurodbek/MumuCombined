@@ -7,6 +7,13 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
+# DownloaderBot's yt-dlp needs a JavaScript runtime for YouTube. Without one,
+# current yt-dlp skips every YouTube client that has to solve the player's
+# challenge and asks with the one client left, which is the one a datacenter
+# address is told to sign in on. Deno is the runtime yt-dlp looks for by
+# default, and its solver scripts come with yt-dlp[default].
+COPY --from=denoland/deno:bin-2.9.7 /deno /usr/local/bin/deno
+
 # MALLOC_ARENA_MAX: glibc would otherwise keep up to 8 x (host cores) malloc
 # arenas for a threaded process, each holding freed memory it never returns.
 # Resident memory is what a usage-billed host charges for.

@@ -110,7 +110,8 @@ from shared_features import (
     terms_command,
     paysupport_command,
     attach_problem_reports,
-    problem_report_callback,
+    add_problem_report_handlers,
+    problem_details,
     refuse_new_work,
     attach_flood_gate,
     attach_maintenance,
@@ -1093,6 +1094,11 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 "blocked": "download_blocked",
                 "too_big": "download_too_big",
             }.get(exc.kind, "download_all_routes_failed")
+            # What a Report tap on this failure may offer to send: the link,
+            # and what every route said about it. Held in memory only.
+            problem_details(update.effective_chat.id, link=url, site=platform,
+                            routes=[f"{name}: {failure.kind}: {resolvers.tidy_error(str(failure))}"
+                                    for name, failure in exc.failures.items()])
             # NO_PREVIEW: yt-dlp's failures quote their own documentation URLs
             # and Telegram expands the first link in a message, so a one-line
             # "couldn't download that" once arrived as a full-width GitHub
@@ -1122,6 +1128,9 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
         except Exception as exc:
             note_job(False)
             logger.exception("Delivering %s via %s failed", platform, resolved.provider)
+            problem_details(update.effective_chat.id, link=url, site=platform,
+                            routes=[f"{resolved.provider}: resolved, then "
+                                    f"{type(exc).__name__}: {resolvers.tidy_error(str(exc))}"])
             await status.set(context.bot, i18n.t(lang, "download_failed", error=exc),
                              **NO_PREVIEW)
             return False
@@ -1406,7 +1415,7 @@ def main():
     app.add_handler(CommandHandler("privacy", privacy_command))
     app.add_handler(CommandHandler("terms", terms_command))
     app.add_handler(CommandHandler("paysupport", paysupport_command))
-    app.add_handler(CallbackQueryHandler(problem_report_callback, pattern=r"^rpt"))
+    add_problem_report_handlers(app)
     app.add_handler(CommandHandler("deletemydata", delete_my_data_command))
     app.add_handler(CallbackQueryHandler(delete_my_data_chosen, pattern="^" + ERASE_PREFIX))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(platforms.ANY_LINK_RE), handle_link))

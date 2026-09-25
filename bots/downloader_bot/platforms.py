@@ -50,9 +50,11 @@ TWITTER_RE = re.compile(
 )
 # Deliberately undocumented everywhere else (see bot.py's HELP_TEXT and
 # BOT_COMMANDS) -- handled if someone pastes one, never mentioned in any
-# command list or help text. It is also the one platform with no provider but
-# yt-dlp, so it is the one most likely to be refusing a server on any given
-# day; advertising it would be promising something the bot cannot keep.
+# command list or help text. It is also the platform most likely to be
+# refusing a server on any given day -- its routes are public cobalt
+# instances and yt-dlp, and YouTube challenges both from datacenter
+# addresses -- so advertising it would be promising something the bot cannot
+# keep.
 YOUTUBE_RE = re.compile(
     r"https?://(?:www\.|m\.)?(?:youtube\.com/(?:watch\?v=|shorts/|live/)|youtu\.be/)\S+",
     re.IGNORECASE,
