@@ -1,0 +1,64 @@
+{
+  "version": "1.7.0",
+  "bots": [
+    {
+      "folder": "sticker_bot",
+      "name": "StickerBot",
+      "prefix": "SBOT",
+      "shared": [
+        "family_link",
+        "lifecycle",
+        "live_message",
+        "problems",
+        "shared_features"
+      ]
+    },
+    {
+      "folder": "convert_bot",
+      "name": "ConvertBot",
+      "prefix": "CBOT",
+      "shared": [
+        "family_link",
+        "lifecycle",
+        "live_message",
+        "problems",
+        "shared_features"
+      ]
+    },
+    {
+      "folder": "downloader_bot",
+      "name": "DownloaderBot",
+      "prefix": "DBOT",
+      "shared": [
+        "family_link",
+        "lifecycle",
+        "live_message",
+        "problems",
+        "shared_features"
+      ]
+    },
+    {
+      "folder": "anon_bot",
+      "name": "AnonBot",
+      "prefix": "ABOT",
+      "shared": [
+        "family_link",
+        "lifecycle",
+        "live_message",
+        "problems",
+        "shared_features"
+      ]
+    },
+    {
+      "folder": "manager_bot",
+      "name": "ManagerBot",
+      "prefix": "MBOT",
+      "shared": [
+        "family_link",
+        "lifecycle",
+        "live_message",
+        "problems"
+      ]
+    }
+  ]
+}

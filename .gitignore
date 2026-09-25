@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Rotating log files, written only off the cloud (LOG_TO_FILES).
+logs/
