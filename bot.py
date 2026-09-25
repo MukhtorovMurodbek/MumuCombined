@@ -33,10 +33,22 @@ HOW THE BOTS STAY SEPARATE
     bot, from the same file, and sees `__file__` as if it sat in that bot's
     folder -- which is where the bot's own copy would have been.
 
-    Per-bot settings that share a name (DB_SCHEMA, PRIVACY_URL, ...) are
-    applied only while that bot is loaded. DB_SCHEMA is always the bot's
-    folder name unless <PREFIX>_DB_SCHEMA says otherwise, and any setting can
-    be given to one bot alone by prefixing it: SBOT_POLL_TIMEOUT=50.
+SETTINGS
+    There is one environment, and each bot's modules see it through a view
+    of their own (their `os.environ`), at load time and every time after:
+
+      - <PREFIX>_<NAME> is <NAME> for that bot only: SBOT_POLL_TIMEOUT=50.
+      - Some names only ever mean one bot -- DB_SCHEMA, PRIVACY_URL,
+        TERMS_URL, PAYMENT_PROVIDER_TOKEN_*. For those the process-wide
+        value is ignored (with a warning); only the prefixed one counts.
+        DB_SCHEMA defaults to the bot's folder name, and PRIVACY_URL /
+        TERMS_URL to POLICY_BASE_URL/<folder>/PRIVACY.md when that is set.
+      - ADMIN_ID stands in for every <PREFIX>_ADMIN_ID that is not set: one
+        owner, one line.
+      - SIBLING_BOTS, when not set, is written from the public bots'
+        <PREFIX>_USERNAME values.
+      - An empty value counts as not set, so a blank line in a pasted
+        settings file means "the default", not a crash.
 
 WHAT IT COSTS
     Everything the five-process shape exists to prevent:
@@ -67,6 +79,7 @@ import signal
 import sys
 import time
 import types
+from collections.abc import MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,12 +102,16 @@ WORKER_THREADS = int(os.environ.get("WORKER_THREADS") or 8)
 # seconds have passed, whichever is first.
 STARTUP_REPORT_SECONDS = 300
 
-# Settings that name one bot. They are only ever set while that bot loads,
-# never for the whole process, where they would rename or re-point all five.
-PER_BOT_ONLY = ("DB_SCHEMA", "FAMILY_BOT_ID", "FAMILY_LABEL")
-# <PREFIX>_<NAME> becomes <NAME> for that bot while it loads -- except these,
-# which the bots already read under their prefixed names.
+# Settings that only ever mean one bot. Given process-wide they would
+# re-point, rename or bill all five at once, so only the prefixed form counts.
+PER_BOT_ONLY = ("DB_SCHEMA", "FAMILY_BOT_ID", "FAMILY_LABEL", "PRIVACY_URL", "TERMS_URL")
+PER_BOT_ONLY_PREFIXES = ("PAYMENT_PROVIDER_TOKEN_",)   # one per currency; a provider token belongs to one bot
+# <PREFIX>_<NAME> is <NAME> for that bot -- except these, which the bots
+# already read under their prefixed names.
 NOT_OVERRIDES = {"TOKEN", "USERNAME", "ADMIN_ID"}
+# Where each bot's PRIVACY.md and TERMS.md are published, as
+# <base>/<folder>/PRIVACY.md -- one line instead of eight.
+POLICY_DOCUMENTS = {"PRIVACY_URL": "PRIVACY.md", "TERMS_URL": "TERMS.md"}
 # Words that read naturally for a bot but are not derived from its folder.
 ALIASES = {"parent": "manager_bot", "parentbot": "manager_bot", "chat": "anon_bot"}
 
@@ -114,6 +131,7 @@ class Bot:
     shared: tuple = ()               # modules taken from the shared folder
     local: frozenset = frozenset()   # every bare name that means "this bot's module"
     import_table: dict | None = None
+    dotenv: dict = field(default_factory=dict)   # the bot's own .env, in the development tree
     handlers: list = field(default_factory=list)
     initialized: bool = False
     module: types.ModuleType | None = None
@@ -132,18 +150,20 @@ class Bot:
         return found
 
     def token_set(self) -> bool:
-        if os.environ.get(f"{self.prefix}_TOKEN"):
-            return True
-        # Run from the development tree, a bot's token is in its own .env,
-        # which the bot loads for itself while it is being imported.
+        return bool(setting(self, f"{self.prefix}_TOKEN"))
+
+    def read_own_env_file(self) -> None:
+        """Run from the development tree, each bot folder has a .env of its
+        own, and what is in it is that bot's alone -- including the names
+        that would otherwise be ignored process-wide, like DB_SCHEMA."""
         env_file = self.directory / ".env"
         if env_file.is_file():
             try:
                 from dotenv import dotenv_values
-                return bool(dotenv_values(env_file).get(f"{self.prefix}_TOKEN"))
             except ImportError:
-                return True
-        return False
+                log.warning("%s has a .env but python-dotenv is not installed -- ignoring it.", self.name)
+                return
+            self.dotenv = {key: value for key, value in dotenv_values(env_file).items() if value}
 
 
 def _family_name(folder: str) -> str:
@@ -186,6 +206,101 @@ def select(bots: list[Bot], wanted: list[str]) -> list[Bot]:
         known = ", ".join(bot.folder.removesuffix("_bot") for bot in bots)
         raise SystemExit(f"Unknown bot(s): {', '.join(unknown)}. Known: {known}.")
     return chosen
+
+
+# ---------------------------------------------------------------------------
+# One environment, a view of it per bot
+# ---------------------------------------------------------------------------
+# Every bot reads its settings from os.environ, some when it loads and some
+# (a payment token, a feature flag) every time it needs them. In one process
+# there is one os.environ, so each bot's modules are given their own view of
+# it instead -- through `import os`, the same way `import db` is theirs --
+# and every rule about which value a bot sees lives in setting() below.
+
+def _per_bot_only(key: str) -> bool:
+    return key in PER_BOT_ONLY or key.startswith(PER_BOT_ONLY_PREFIXES)
+
+
+def setting(bot: Bot, key: str) -> str | None:
+    """The value of `key` as `bot` sees it, or None. Empty counts as unset."""
+    env, own = os.environ, bot.dotenv
+
+    if key.startswith(bot.prefix + "_"):
+        # A name the bot reads under its own prefix already: SBOT_TOKEN.
+        value = env.get(key) or own.get(key)
+        if not value and key == f"{bot.prefix}_ADMIN_ID":
+            value = env.get("ADMIN_ID") or own.get("ADMIN_ID")
+        return value or None
+
+    if key not in NOT_OVERRIDES:
+        value = env.get(f"{bot.prefix}_{key}")
+        if value:
+            return value
+
+    if _per_bot_only(key):
+        if own.get(key):
+            return own[key]
+        if key == "DB_SCHEMA":
+            return bot.folder
+        base = (env.get("POLICY_BASE_URL") or "").rstrip("/")
+        if key in POLICY_DOCUMENTS and base:
+            return f"{base}/{bot.folder}/{POLICY_DOCUMENTS[key]}"
+        return None
+
+    return env.get(key) or own.get(key) or None
+
+
+class BotEnviron(MutableMapping):
+    """os.environ as one bot sees it. Reads go through setting(); writes go
+    to the real environment, as they always would."""
+
+    def __init__(self, bot: Bot):
+        self._bot = bot
+
+    def __getitem__(self, key):
+        value = setting(self._bot, key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key, value):
+        os.environ[key] = value
+
+    def __delitem__(self, key):
+        del os.environ[key]
+
+    def _names(self):
+        names = set(os.environ) | set(self._bot.dotenv) | {"DB_SCHEMA"}
+        for key in os.environ:
+            if key.startswith(self._bot.prefix + "_"):
+                names.add(key[len(self._bot.prefix) + 1:])
+        return names
+
+    def __iter__(self):
+        return iter(sorted(name for name in self._names() if setting(self._bot, name) is not None))
+
+    def __len__(self):
+        return sum(1 for _ in self)
+
+    def copy(self) -> dict:
+        return dict(self)
+
+    def __repr__(self):
+        return f"<environment as {self._bot.name} sees it>"
+
+
+class _BotOs(types.ModuleType):
+    """`os` as a bot's modules see it: the real one, except its environment."""
+
+    def __init__(self, bot: Bot):
+        super().__init__("os", os.__doc__)
+        self.environ = BotEnviron(bot)
+
+    def __getattr__(self, attribute):
+        return getattr(os, attribute)
+
+    def getenv(self, key, default=None):
+        return self.environ.get(key, default)
 
 
 # ---------------------------------------------------------------------------
@@ -252,15 +367,16 @@ class _BotImportlib(types.ModuleType):
 
 def _builtins_for(bot: Bot) -> dict:
     real_import = builtins.__import__
-    proxy = _BotImportlib(bot)
+    proxies = {"importlib": _BotImportlib(bot), "os": _BotOs(bot)}
 
     def bot_import(name, globals=None, locals=None, fromlist=(), level=0):
         if level == 0:
             if name in bot.local:
                 return importlib.import_module(f"{bot.folder}.{name}")
-            if name == "importlib" or (name.startswith("importlib.") and not fromlist):
+            top = name.partition(".")[0]
+            if top in proxies and (name == top or not fromlist):
                 real_import(name, globals, locals, fromlist, level)
-                return proxy
+                return proxies[top]
         return real_import(name, globals, locals, fromlist, level)
 
     table = dict(vars(builtins))
@@ -298,21 +414,17 @@ def forget(bot: Bot) -> None:
 
 @contextlib.contextmanager
 def bot_environment(bot: Bot):
-    """The environment exactly as this bot would see it running alone, for as
-    long as it is being loaded. Restored afterwards, including anything the
-    bot's own load_dotenv() added."""
+    """Whatever a bot writes into the real environment while it loads -- its
+    own load_dotenv() does, in the development tree -- is undone afterwards,
+    so the next bot does not inherit it. What the bot *reads* comes through
+    its own view (BotEnviron) and needs nothing here."""
     saved = dict(os.environ)
     try:
-        for key, value in saved.items():
-            if key.startswith(bot.prefix + "_"):
-                rest = key[len(bot.prefix) + 1:]
-                if rest and rest not in NOT_OVERRIDES:
-                    os.environ[rest] = value
-        os.environ["DB_SCHEMA"] = saved.get(f"{bot.prefix}_DB_SCHEMA") or bot.folder
         yield
     finally:
-        os.environ.clear()
-        os.environ.update(saved)
+        if dict(os.environ) != saved:
+            os.environ.clear()
+            os.environ.update(saved)
 
 
 # ---------------------------------------------------------------------------
@@ -809,12 +921,25 @@ def _load_dotenv() -> None:
 
 
 def _clear_per_bot_settings() -> None:
-    for key in PER_BOT_ONLY:
-        if key in os.environ:
+    for key in [key for key in os.environ if _per_bot_only(key)]:
+        if os.environ[key]:
+            shown = "<set>" if key.startswith(PER_BOT_ONLY_PREFIXES) else os.environ[key]
             log.warning("Ignoring %s=%s: in one process it would apply to every bot. "
-                        "Give it to one bot with its prefix, e.g. SBOT_%s.",
-                        key, os.environ[key], key)
-            del os.environ[key]
+                        "Give it to one bot with its prefix, e.g. SBOT_%s.", key, shown, key)
+        del os.environ[key]
+
+
+def derive_siblings(bots: list[Bot]) -> None:
+    """SIBLING_BOTS -- how the public bots point at each other -- is nothing
+    but their usernames, which are already set once each. Written from them
+    unless it was given."""
+    if os.environ.get("SIBLING_BOTS"):
+        return
+    entries = [f"{bot.name.lower()}:{bot.name}:{setting(bot, f'{bot.prefix}_USERNAME')}"
+               for bot in bots
+               if bot.folder != "manager_bot" and setting(bot, f"{bot.prefix}_USERNAME")]
+    if entries:
+        os.environ["SIBLING_BOTS"] = ",".join(entries)
 
 
 def check(bots: list[Bot]) -> int:
@@ -849,6 +974,27 @@ def check(bots: list[Bot]) -> int:
             if module is not None:
                 expect(f"{bot.name}: {name} sees itself in its bot's folder",
                        Path(module.__file__).parent == bot.directory)
+        # Settings, read the way the bot reads them -- through its own `os`.
+        view = getattr(db, "os", None)
+        expect(f"{bot.name}: reads settings through its own view", isinstance(view, _BotOs))
+        if isinstance(view, _BotOs):
+            expect(f"{bot.name}: sees DB_SCHEMA={package} after loading too",
+                   view.environ.get("DB_SCHEMA") == package)
+            for key, value in os.environ.items():
+                other = next((b for b in bots if key.startswith(b.prefix + "_")), None)
+                name = key.split("_", 1)[1] if other else None
+                if not value or name in NOT_OVERRIDES or name is None:
+                    continue
+                if other is bot:
+                    expect(f"{bot.name}: {key} reaches it as {name}", view.environ.get(name) == value)
+                elif _per_bot_only(name):
+                    expect(f"{bot.name}: {key} does not leak into it", view.environ.get(name) != value)
+        admins = os.environ.get("ADMIN_ID")
+        own_admins = f"{bot.prefix}_ADMIN_ID"
+        if (admins and hasattr(bot.module, "ADMIN_IDS")
+                and not (os.environ.get(own_admins) or bot.dotenv.get(own_admins))):
+            expect(f"{bot.name}: ADMIN_ID is its admin list",
+                   bot.module.ADMIN_IDS == {int(x) for x in admins.split(",") if x.strip()})
         print(f"  ok    {bot.name}: {len(mine)} modules, schema {getattr(db, 'DB_SCHEMA', '?')}")
     links = [sys.modules.get(f"{bot.folder}.family_link") for bot in loaded]
     expect("no two bots share a family_link", len({id(link) for link in links}) == len(links))
@@ -881,6 +1027,9 @@ def main(argv: list[str]) -> int:
     everything, _SHARED_DIR, version = discover()
     if not everything:
         raise SystemExit(f"No bots found next to {ROOT}.")
+    for bot in everything:
+        bot.read_own_env_file()
+    derive_siblings(everything)
     bots = select(everything, words)
 
     if "--list" in flags:
@@ -905,7 +1054,7 @@ def main(argv: list[str]) -> int:
             bot.state, bot.problem = "skipped", f"no {bot.prefix}_TOKEN"
             log.info("%s skipped: %s is not set.", bot.name, f"{bot.prefix}_TOKEN")
             continue
-        token = os.environ.get(f"{bot.prefix}_TOKEN")
+        token = setting(bot, f"{bot.prefix}_TOKEN")
         if token and token in tokens:
             bot.state, bot.problem = "skipped", f"same token as {tokens[token].name}"
             log.error("%s skipped: it has the same token as %s, and two pollers on one "

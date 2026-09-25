@@ -85,25 +85,41 @@ python bot.py
 
 ## Configuration
 
-`.env.example` lists every variable. The ones that matter:
+`.env.example` is every setting any of the five bots reads, each marked
+**required**, **required for** one bot, or **optional** with its default. Only
+twelve lines are needed to run all five: `DATABASE_URL`, `ADMIN_ID`, and a
+token and username for each bot — `SBOT_` StickerBot, `CBOT_` ConvertBot,
+`DBOT_` DownloaderBot, `ABOT_` AnonBot, `MBOT_` ManagerBot:
+
+```
+SBOT_TOKEN=123456:ABC...
+SBOT_USERNAME=my_sticker_bot
+```
 
 - **`DATABASE_URL`** — one Postgres for all five. Each bot keeps its tables
   in a schema named after its folder (`sticker_bot`, `convert_bot`, …); that
   is set automatically.
-- **`<PREFIX>_TOKEN`, `<PREFIX>_USERNAME`, `<PREFIX>_ADMIN_ID`** for each
-  bot, where the prefix is `SBOT`, `CBOT`, `DBOT`, `ABOT` or `MBOT`. A bot
-  without a token is not started, so any subset runs.
-- **`BOTS`** — a comma-separated subset to run, e.g. `BOTS=sticker,anon`.
-  `python bot.py sticker anon` does the same.
+- **`ADMIN_ID`** — the owner's Telegram id, once, for all five bots.
+- **A bot without a token is not started**, so any subset runs. `BOTS`
+  picks a subset explicitly: `BOTS=sticker,anon`, or
+  `python bot.py sticker anon`.
+- **Derived rather than repeated:** the list of sibling bots each public bot
+  shows is written from their usernames, and `POLICY_BASE_URL` gives every
+  bot the links to its own `PRIVACY.md` and `TERMS.md`.
 
-Every other setting a bot understands has a working default. A setting given
-under its own name applies to every bot; the same setting with a bot's prefix
-applies to that bot only:
+Every other setting has a working default. A setting given under its own name
+applies to every bot; the same setting with a bot's prefix applies to that
+bot only, whenever the bot reads it:
 
 ```
 POLL_TIMEOUT=30          every bot
 DBOT_POLL_TIMEOUT=50     DownloaderBot only
 ```
+
+A few settings only ever describe one bot — its database schema, its policy
+links, a payment provider's token — and are accepted only with a prefix; a
+process-wide value is ignored, with a warning in the log. An empty value
+counts as not set.
 
 ---
 
