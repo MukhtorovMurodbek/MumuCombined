@@ -3,6 +3,7 @@
 **/.env
 **/__pycache__
 **/*.pyc
-**/logs
+data
 .venv
 venv
+CHANGES_*.md

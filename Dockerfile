@@ -7,9 +7,8 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
-# MALLOC_ARENA_MAX: glibc would otherwise keep up to 8 x (host cores) malloc
-# arenas for a threaded process, each holding freed memory it never returns.
-# Resident memory is what a usage-billed host charges for.
+# MALLOC_ARENA_MAX keeps glibc from holding freed memory in one arena per
+# core; resident memory is what a usage-billed host charges for.
 # LOG_TO_FILES=0: a container's log is its stdout; /logs reads from memory.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -23,13 +22,13 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY . .
-# Bytecode is compiled here, once, rather than on every start. Then every bot
-# is loaded and checked for isolation, so an image in which a bot cannot even
-# be imported never gets as far as a deploy.
-RUN python -m compileall -q bot.py bots shared \
- && python bot.py --check \
+# The runner's bytecode once, here (the sections are compiled as they load).
+# Then every bot is loaded and one conversion is run, so
+# an image in which a bot cannot load never gets as far as a deploy.
+RUN python -m compileall -q main.py \
+ && python main.py --check \
  && useradd --create-home --uid 10001 bots \
- && chown -R bots /app
+ && mkdir -p data && chown -R bots /app
 USER bots
 
-CMD ["python", "bot.py"]
+CMD ["python", "main.py"]
