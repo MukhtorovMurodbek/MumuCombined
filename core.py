@@ -6669,20 +6669,39 @@ async def _flush_activity_job(context) -> None:
     except Exception:
         logging.getLogger(__name__).debug("Activity flush failed; will retry", exc_info=True)
 
+GROUP_CHAT_TYPES = ("group", "supergroup")
+
+def in_group_chat(update) -> bool:
+    chat = getattr(update, "effective_chat", None)
+    return chat is not None and getattr(chat, "type", None) in GROUP_CHAT_TYPES
+
+def note_active(context, user) -> None:
+    """Count `user` as somebody the bot served: the active-user records, the usage window's people,
+    and the clock that frees their cached state once they go quiet. track_activity does it for every
+    private update; a group handler does it only for the people it actually serves."""
+    _activity_buffer.add(user.id)
+    note_usage_update(user.id)
+    context.user_data["_last_seen"] = time.time()
+
 async def track_activity(update, context) -> None:
     """Register as a TypeHandler(Update, track_activity, ...) in a group of its OWN, above every other group, so /status can report active users hourly / since this process started."""
     note_network_ok()
 
-    live_message.note_update(update)
     # Set for every update, so one person's never carries over to the next in the same task.
     _not_counted.set(is_not_counted(getattr(update.effective_user, "id", None)))
     _count_tap(update)
     user = update.effective_user
+    if in_group_chat(update):
+        # Most of a group's messages are not meant for the bot (DownloaderBot reads a whole group
+        # for its links), so they count nobody as having used it: the handler that serves somebody
+        # there calls note_active. Nor do they bury a live message: in a group one is edited where it is.
+        if user:
+            note_usage_update(None)
+        return
+    live_message.note_update(update)
     if not user:
         return
-    _activity_buffer.add(user.id)
-    note_usage_update(user.id)
-    context.user_data["_last_seen"] = time.time()
+    note_active(context, user)
     remember_chat_lang(user.id, context.user_data.get("lang"))
 
     have = context.user_data.get(MENU_SIGNATURE_KEY)

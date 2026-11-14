@@ -264,6 +264,12 @@ Reddit or X and sends back the media behind it. Everything under
 - **One row per download** — which platform, and when. The daily allowance is
   counted from it; the link is not part of the row. Kept 7 days.
 - **Work in progress** — a download waiting on a choice.
+- **In a group:** nothing about the group itself. Added to a group (as an admin, so
+  that it sees the messages there), the bot checks every message for a link to one
+  of the sites above and keeps nothing from the rest. A link it downloads there
+  counts as the person who posted it: their allowance row, and the last download
+  for five minutes, as in a private chat. What it sends goes to the group, where
+  everyone in it can see it.
 
 Not held: the media itself beyond those five minutes (fetched, sent, and
 deleted); who asked for which post, in the references to files already sent (they

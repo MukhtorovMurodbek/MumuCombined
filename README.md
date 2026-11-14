@@ -133,7 +133,10 @@ grey and flat.
 
 ### DownloaderBot
 
-Pasting a supported link is the whole interface.
+Pasting a supported link is the whole interface. In a group, added as an admin (so it
+sees the messages there), it downloads the links people post, as videos and photos with
+the credit line, and says nothing about anything else: no buttons, settings or paid
+large files there, and nothing kept about the group.
 
 | platform | returns |
 |---|---|

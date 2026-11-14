@@ -3935,6 +3935,7 @@ if __name__ == "__main__":
 # ─── module: downloader_bot.bot ──────────────────────────────────────────────
 """Media downloader bot -- 4th bot in the family (see ARCHITECTURE.md)."""
 import asyncio
+import contextvars
 import hashlib
 import logging
 import os
@@ -3952,7 +3953,7 @@ except ImportError:
     pass
 
 from telegram import (
-    BotCommand, InputMediaDocument, InputMediaPhoto, InputMediaVideo,
+    BotCommand, BotCommandScopeAllGroupChats, InputMediaDocument, InputMediaPhoto, InputMediaVideo,
     LinkPreviewOptions, Update, InlineKeyboardButton, InlineKeyboardMarkup,
 )
 from telegram.error import BadRequest
@@ -3960,6 +3961,8 @@ from telegram.error import BadRequest
 NO_PREVIEW = {"link_preview_options": LinkPreviewOptions(is_disabled=True)}
 from telegram.ext import (
     ApplicationBuilder,
+    ApplicationHandlerStop,
+    ChatMemberHandler,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
@@ -4632,7 +4635,24 @@ REDELIVER_MEMORY = 5
 
 MERGE_PREFIX = "merge:"
 
-def _remember_delivery(context, platform: str, url: str, lossless: bool) -> str:
+# In a group chat (group_router) a link is downloaded the plain way: as videos and photos, with the
+# credit line, and with no buttons, no donation nudge and no paid large files -- those are for the person,
+# in their own chat. Set for the whole download (asyncio tasks take the context they were created in).
+_IN_GROUP: contextvars.ContextVar = contextvars.ContextVar("downloader_in_group", default=False)
+
+async def _lossless_wanted(user_id: int) -> bool:
+    if _IN_GROUP.get():
+        return False
+    return await asyncio.to_thread(get_lossless_enabled, user_id)
+
+async def _caption_wanted(user_id: int) -> bool:
+    if _IN_GROUP.get():
+        return True
+    return await asyncio.to_thread(get_caption_enabled, user_id)
+
+def _remember_delivery(context, platform: str, url: str, lossless: bool) -> "str | None":
+    if _IN_GROUP.get():
+        return None  # no buttons in a group, so nothing for them to read back
     memory = context.user_data.setdefault("redeliver", {})
     while len(memory) >= REDELIVER_MEMORY:
         memory.pop(next(iter(memory)))
@@ -4682,7 +4702,8 @@ def _remembered_kb(lang: str, token: str, remembered: dict):
 def _nudge_kb(lang: str | None = None, token: str | None = None,
               lossless: bool = False, photos: int = 0,
               items: int = 0, spent=()) -> InlineKeyboardMarkup | None:
-
+    if _IN_GROUP.get():
+        return None
     rows = []
     if lang is not None and token is not None:
 
@@ -4895,7 +4916,7 @@ async def _merge_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 raise _MergeStop("merge_too_big")
 
             caption = None
-            if await asyncio.to_thread(get_caption_enabled, user_id):
+            if await _caption_wanted(user_id):
                 caption = i18n.t(lang, "download_credit_caption", username=BOT_USERNAME)
             with open(out_path, "rb") as handle:
 
@@ -4935,6 +4956,8 @@ async def _merge_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
     return True
 
 async def _after_send(update: Update, context: ContextTypes.DEFAULT_TYPE, lang: str):
+    if _IN_GROUP.get():
+        return  # a donation nudge is for the person, never for a whole group
     nudge = await maybe_donation_nudge(
         update.effective_user.id, lang, context, update.effective_chat.id)
     if nudge:
@@ -4957,7 +4980,7 @@ async def _reply_image_with_button(update, context, data: bytes, stem: str, lang
                                    lossless: bool | None = None):
     """An image, with the same "the other way round" button the media path puts under a video."""
     if lossless is None:
-        lossless = await asyncio.to_thread(get_lossless_enabled, update.effective_user.id)
+        lossless = await _lossless_wanted(update.effective_user.id)
     token = _remember_delivery(context, platform, url, lossless)
     return await _reply_image(update, data, stem,
                               reply_markup=_nudge_kb(lang, token, lossless),
@@ -4967,7 +4990,7 @@ async def _reply_image(update: Update, data: bytes, stem: str, reply_markup=None
                        lossless: bool | None = None):
     """One image back, compressed as a photo or verbatim as a file -- see lossless_toggle for which and why."""
     if lossless is None:
-        lossless = await asyncio.to_thread(get_lossless_enabled, update.effective_user.id)
+        lossless = await _lossless_wanted(update.effective_user.id)
 
     if lossless:
         return await update.effective_message.reply_document(
@@ -5009,10 +5032,10 @@ async def _send_media(update, context, items_with_paths, lang,
                       probing: "video.ProbeRun | None" = None) -> "list[tuple[str, str]] | None":
     """Put what was resolved into the chat."""
     caption = None
-    if await asyncio.to_thread(get_caption_enabled, update.effective_user.id):
+    if await _caption_wanted(update.effective_user.id):
         caption = i18n.t(lang, "download_credit_caption", username=BOT_USERNAME)
     if lossless is None:
-        lossless = await asyncio.to_thread(get_lossless_enabled, update.effective_user.id)
+        lossless = await _lossless_wanted(update.effective_user.id)
     if probing is None:
         probing = video.ProbeRun()
 
@@ -5132,7 +5155,7 @@ async def _resend_by_file_id(update, context, lang, status, platform: str, url: 
         return None
     try:
         if lossless_override is None:
-            lossless = await asyncio.to_thread(get_lossless_enabled, user_id)
+            lossless = await _lossless_wanted(user_id)
         else:
             lossless = lossless_override
         key = sent_files.post_key(platform, url, lossless)
@@ -5238,8 +5261,7 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if cached is not None:
             try:
                 if lossless_override is None:
-                    delivered_lossless = await asyncio.to_thread(
-                        get_lossless_enabled, update.effective_user.id)
+                    delivered_lossless = await _lossless_wanted(update.effective_user.id)
                 else:
                     delivered_lossless = lossless_override
                 token = _remember_delivery(context, platform, url, delivered_lossless)
@@ -5293,8 +5315,7 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 if len(paths) > 1:
                     items, paths[:] = await asyncio.to_thread(_without_duplicates, items, list(paths))
                 if lossless_override is None:
-                    delivered_lossless = await asyncio.to_thread(
-                        get_lossless_enabled, update.effective_user.id)
+                    delivered_lossless = await _lossless_wanted(update.effective_user.id)
                 else:
                     delivered_lossless = lossless_override
                 token = _remember_delivery(context, platform, url, delivered_lossless)
@@ -5415,7 +5436,7 @@ async def _large_download(update, context, status, lang, platform: str, url: str
 async def _send_large(update, context, items_with_paths, lang) -> None:
     """What a large download fetched: anything over the Bot API's 50 MB goes over MTProto as a file, the rest as usual, one by one."""
     caption = None
-    if await asyncio.to_thread(get_caption_enabled, update.effective_user.id):
+    if await _caption_wanted(update.effective_user.id):
         caption = i18n.t(lang, "download_credit_caption", username=BOT_USERNAME)
     probing = video.ProbeRun()
     for item, path in items_with_paths:
@@ -5555,6 +5576,108 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not spawned:
             _clear_in_flight(key, stamp)
 
+# ---------------------------------------------------------------------------
+# Group chats (basic; 2.2.0 adds per-group /settings and channels)
+# ---------------------------------------------------------------------------
+# Added to a group, the bot downloads the supported links people post there, as videos and photos,
+# with the credit line, and says nothing about anything else. It sees those links only as an admin
+# (or with group privacy switched off in @BotFather); its greeting says when it can't.
+# Everything from a group goes through group_router, in handler group -1 before the private chat's
+# own handlers, and stops there: none of the private chat's answers ("that doesn't look like a link",
+# a waiting prompt, the settings) is ever said to a whole group.
+GROUP_TYPES = ("group", "supergroup")
+
+
+def _group_command(message) -> "str | None":
+    """The command a group message is ("help"), "" for a command meant for another bot
+    (/help@OtherBot), or None for a message that is not a command."""
+    text = (message.text or "") if message is not None else ""
+    if not text.startswith("/"):
+        return None
+    name, _, addressee = text.split()[0][1:].partition("@")
+    if addressee and (not BOT_USERNAME or addressee.lower() != BOT_USERNAME.lower()):
+        return ""
+    return name.lower()
+
+
+def _group_link(update) -> bool:
+    """A group message that is a supported link (and not a command)."""
+    message = update.effective_message
+    text = (message.text or "") if message is not None else ""
+    return bool(text) and not text.startswith("/") and platforms.detect_platform(text) is not None
+
+
+async def _sees_group_messages(bot, chat_id: int) -> bool:
+    """Whether the links people post here reach the bot. True when it cannot tell."""
+    if getattr(bot, "can_read_all_group_messages", False):
+        return True
+    try:
+        member = await bot.get_chat_member(chat_id, bot.id)
+    except Exception:
+        return True
+    return member.status in ("administrator", "creator")
+
+
+async def _group_hello(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The greeting when the bot is added, and the answer to /start and /help in a group."""
+    user = update.effective_user
+    lang = await i18n.get_lang(user.id, context) if user is not None else "en"
+    chat_id = update.effective_chat.id
+    text = i18n.t(lang, "group_hello")
+    if not await _sees_group_messages(context.bot, chat_id):
+        text += "\n\n" + i18n.t(lang, "group_cant_see")
+    await context.bot.send_message(chat_id, text, **NO_PREVIEW)
+
+
+async def group_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Every message from a group chat: /start and /help, links -- and silence for everything
+    else. Always ends the update here (ApplicationHandlerStop). An error goes to the error
+    handler as a task of its own, so it is reported like any other while the update still stops."""
+    message, user = update.effective_message, update.effective_user
+    try:
+        command = _group_command(message)
+        if command in ("start", "help"):
+            if user is not None:
+                shared_features.note_active(context, user)
+            await _group_hello(update, context)
+        elif command is None and user is not None and not user.is_bot and _group_link(update):
+            # Counted as having used the bot only for the link it serves them.
+            shared_features.note_active(context, user)
+            token = _IN_GROUP.set(True)
+            try:
+                await handle_link(update, context)
+            finally:
+                _IN_GROUP.reset(token)
+    except Exception as exc:
+        error = exc
+
+        async def report():
+            raise error
+
+        context.application.create_task(report(), update=update)
+    raise ApplicationHandlerStop
+
+
+async def bot_membership_changed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Added to a group: say hello and what it needs. Nothing is kept about a group."""
+    change = update.my_chat_member
+    if change is None or change.chat.type not in GROUP_TYPES:
+        return
+    before, now = change.old_chat_member.status, change.new_chat_member.status
+    if before in ("left", "kicked") and now not in ("left", "kicked"):
+        await _group_hello(update, context)
+
+
+async def _publish_group_menu(application) -> None:
+    """In groups the menu offers /help only: the private chat's commands do nothing there."""
+    for language in (None,) + tuple(i18n.SUPPORTED_LANGUAGES):
+        try:
+            await application.bot.set_my_commands(
+                [BotCommand("help", i18n.t(language or "en", "group_cmd_help"))],
+                scope=BotCommandScopeAllGroupChats(), language_code=language)
+        except Exception:
+            logger.debug("Could not publish the group menu (%s)", language or "default", exc_info=True)
+
 async def unrecognized_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Catches anything that isn't a recognized link and isn't a known command -- registered last, so it only fires when nothing else already handled the update."""
     lang = await i18n.get_lang(update.effective_user.id, context)
@@ -5597,6 +5720,7 @@ async def _post_init(application):
             _sweep_delivery_cache, interval=DELIVERY_CACHE_SWEEP_SECONDS,
             first=DELIVERY_CACHE_SWEEP_SECONDS)
     await publish_commands(application, BOT_COMMANDS, ADMIN_COMMANDS, ADMIN_IDS)
+    await _publish_group_menu(application)
     await publish_profile(application)
     if big_files.CONFIGURED:
         task = asyncio.get_running_loop().create_task(_check_big_files())
@@ -5649,12 +5773,17 @@ def main():
 
     app.add_handler(TypeHandler(Update, track_activity), group=-4)
 
-    attach_flood_gate(app, ADMIN_IDS)
+    # Group chatter that is not a link is not the bot's business, flooding or not.
+    attach_flood_gate(app, ADMIN_IDS,
+                      exempt=lambda update: shared_features.in_group_chat(update) and not _group_link(update))
 
     attach_promo_claim(app)
 
+    # First in group -1, so a group message never reaches the private chat's handlers (group_router).
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS, group_router), group=-1)
     app.add_handler(MessageHandler((filters.TEXT | filters.REPLY) & ~filters.COMMAND,
                                    awaited_text_received), group=-1)
+    app.add_handler(ChatMemberHandler(bot_membership_changed, ChatMemberHandler.MY_CHAT_MEMBER))
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -5720,7 +5849,8 @@ def main():
 
     app.run_polling(**lifecycle.polling_kwargs(
         timeout=POLL_TIMEOUT,
-        allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY, Update.PRE_CHECKOUT_QUERY],
+        allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY, Update.PRE_CHECKOUT_QUERY,
+                         Update.MY_CHAT_MEMBER],
     ))
 
 if __name__ == "__main__":
