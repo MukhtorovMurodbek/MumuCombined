@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 FAMILY_SCHEMA = "family"
 
-VERSION = os.environ.get("FAMILY_VERSION", "2.1.6")
+VERSION = os.environ.get("FAMILY_VERSION", "2.1.7")
 
 _REPORTS_BECAME_AUTOMATIC = datetime(2026, 9, 13, tzinfo=timezone.utc)
 

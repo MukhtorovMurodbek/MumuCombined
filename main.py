@@ -72,7 +72,7 @@ PER_BOT_ONLY_PREFIXES = ("PAYMENT_PROVIDER_TOKEN_",)
 NOT_OVERRIDES = {"TOKEN", "USERNAME", "ADMIN_ID"}
 
 POLICY_DOCUMENTS = {"PRIVACY_URL": "privacy", "TERMS_URL": "terms"}
-LEGAL_URL = "https://github.com/MukhtorovMurodbek/MumuCombined/blob/main/LEGAL.md"
+LEGAL_URL = "https://github.com/MukhtorovMurodbek/MumuBots/blob/main/LEGAL.md"
 
 BOTS = (
     ("sticker_bot", "StickerBot", "SBOT"),
@@ -1037,6 +1037,25 @@ def check(bots: list[Bot]) -> int:
                 print("  ok    ConvertBot: text recognition read its test page")
         else:
             print("  --    ConvertBot: text recognition not checked (TESSDATA_PREFIX is not set)")
+        # PowerPoint, Word and Excel files go through LibreOffice: a PDF is opened as slides,
+        # saved as PPTX, then PPT, then PDF again, and its text read back. The Dockerfile sets
+        # MUMU_CHECK_OFFICE, so an image without a working LibreOffice fails here; a checkout
+        # without it is checked only where LibreOffice is installed.
+        office = importlib.import_module("convert_bot.office_convert")
+        if os.environ.get("MUMU_CHECK_OFFICE") or office.soffice_path():
+            importlib.import_module("convert_bot.formats").probe()
+            try:
+                office.selftest()
+                office_problem = None
+            except SystemExit:
+                office_problem = "its self-test failed: see the line above"
+            except Exception as exc:
+                office_problem = f"{type(exc).__name__}: {exc}"
+            expect(f"ConvertBot converts an office file ({office_problem})", office_problem is None)
+            if office_problem is None:
+                print("  ok    ConvertBot: LibreOffice turned a PDF into slides and back, and a document and a spreadsheet")
+        else:
+            print("  --    ConvertBot: office files not checked (no LibreOffice here)")
     video = sys.modules.get("downloader_bot.video")
     if video is not None:
         # Videos are sent with their real width and height (video.probe); a build

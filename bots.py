@@ -2834,13 +2834,65 @@ def _download_progress(context, status, lang: str):
             await status.set(context.bot, text)
     return progress
 
+# Most likely cause of the "Timed out" a first try used to end in, where the second try worked:
+# getFile on a file the Bot API server has not seen yet makes that server fetch the whole file
+# from Telegram's storage before it answers, which can take longer than the library's 5 s default.
+# The report kept no traceback, so the log now says which step failed (see _download_bot_api).
+GET_FILE_READ_S = float(os.environ.get("CONVERT_GET_FILE_READ_S") or 90)
+DOWNLOAD_TRIES = 3
+
+class _Interrupted(Exception):
+    """A streamed download that broke off; worth another try."""
+
+def _worth_another_try(exc: BaseException) -> bool:
+    """A timeout or a dropped connection, not a refusal: the next try usually just works."""
+    from telegram.error import BadRequest, NetworkError, RetryAfter
+    if isinstance(exc, BadRequest):
+        return False
+    return isinstance(exc, (NetworkError, RetryAfter, _Interrupted, asyncio.TimeoutError))
+
 async def _download_bot_api(context, file_obj, path, declared_size: int, status, lang: str) -> None:
-    """A file within the Bot API's 20 MB, streamed so the card can move."""
-    tg_file = await context.bot.get_file(file_obj.file_id)
+    """A file within the Bot API's 20 MB, with up to DOWNLOAD_TRIES tries when the network is what failed."""
+    for attempt in range(1, DOWNLOAD_TRIES + 1):
+        try:
+            await _download_bot_api_once(context, file_obj, path, declared_size, status, lang)
+            return
+        except Exception as exc:
+            if attempt == DOWNLOAD_TRIES or not _worth_another_try(exc):
+                logger.warning("Download gave up after %d try(s) at %s: %s", attempt,
+                               getattr(exc, "mumu_step", "getFile"), type(exc).__name__)
+                if isinstance(exc, _Interrupted):
+                    raise ConvertError(str(exc)) from None
+                raise
+            wait = 2.0 * attempt
+            retry_after = getattr(exc, "retry_after", None)
+            if retry_after is not None:
+                seconds = retry_after.total_seconds() if isinstance(retry_after, timedelta) else float(retry_after)
+                wait = min(max(wait, seconds + 0.5), 30.0)
+            logger.info("Download try %d of %d failed (%s); trying again in %.0f s",
+                        attempt, DOWNLOAD_TRIES, type(exc).__name__, wait)
+            await asyncio.sleep(wait)
+
+async def _download_bot_api_once(context, file_obj, path, declared_size: int, status, lang: str) -> None:
+    """One try: getFile, then the file itself, streamed when it is big enough for the card to move."""
+    tg_file = await context.bot.get_file(file_obj.file_id, read_timeout=GET_FILE_READ_S)
+    try:
+        await _fetch_file(tg_file, path, declared_size, status, context, lang)
+    except Exception as exc:
+        try:
+            exc.mumu_step = "the download"
+        except Exception:
+            pass
+        raise
+
+async def _fetch_file(tg_file, path, declared_size: int, status, context, lang: str) -> None:
     url = getattr(tg_file, "file_path", None) or ""
+    # About 100 KB/s at worst, and never under a minute.
+    read_s = max(60.0, declared_size / 100_000)
     if (status is None or LOCAL_BOT_API_URL or not url.startswith("https://")
             or declared_size < _CARD_FROM_BYTES):
-        await tg_file.download_to_drive(custom_path=path)
+        await tg_file.download_to_drive(custom_path=path, read_timeout=read_s, write_timeout=60,
+                                        connect_timeout=30)
         return
     import httpx
     progress = _download_progress(context, status, lang)
@@ -2856,9 +2908,11 @@ async def _download_bot_api(context, file_obj, path, declared_size: int, status,
                         done += len(chunk)
                         await progress(done, total)
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 500:
+            raise _Interrupted(f"Telegram's file server answered {exc.response.status_code}") from None
         raise ConvertError(f"Telegram's file server answered {exc.response.status_code}") from None
     except httpx.HTTPError as exc:
-        raise ConvertError(f"the download was interrupted ({type(exc).__name__})") from None
+        raise _Interrupted(f"the download was interrupted ({type(exc).__name__})") from None
 
 async def _download_big(context, msg, path, declared_size: int, status, lang: str) -> None:
     """A file over the Bot API's 20 MB, fetched over MTProto -- big_files.py. Raises what big_files.download raises."""
@@ -2900,6 +2954,13 @@ async def convert_receive_file(update: Update, context: ContextTypes.DEFAULT_TYP
     if not ext:
         await msg.reply_text(
             i18n.t(lang, "unknown_extension"), reply_markup=_what_formats_keyboard(lang),
+        )
+        return
+    if not formats.is_supported_source(ext):
+        # Said before the download, not after it: nothing is fetched that can't be converted.
+        await msg.reply_text(
+            i18n.t(lang, "unsupported_format", ext=formats.normalise(ext)),
+            reply_markup=_what_formats_keyboard(lang),
         )
         return
 
@@ -3349,16 +3410,20 @@ async def convert_show_more(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _result_caption(lang: str, result, src_ext: str, target_ext: str, stars_paid: int) -> str:
     """Say what actually came back."""
     if result.zipped and target_ext != "zip":
-        key = "converted_file_caption_pages" if formats.category_of(src_ext) == formats.DOCUMENT \
+        key = "converted_file_caption_pages" \
+            if formats.category_of(src_ext) in (formats.DOCUMENT, formats.PRESENTATION) \
             else "converted_file_caption_zip"
         caption = i18n.t(lang, key, items=result.items)
     elif result.items > 1 and target_ext == "pdf":
         caption = i18n.t(lang, "converted_file_caption_pdf", items=result.items)
     else:
         caption = i18n.t(lang, "converted_file_caption" if stars_paid else "converted_file_caption_free")
-    if src_ext in ("docx", "md", "html", "txt") and target_ext == "pdf":
+    # LibreOffice lays a Word document out by Word's own rules; only without it is the page re-laid.
+    relaid = ("md", "html", "txt") if formats.met("office") else ("docx", "md", "html", "txt")
+    if src_ext in relaid and target_ext == "pdf":
         caption += "\n\n" + i18n.t(lang, "converted_layout_note")
-    if target_ext == "docx":
+    # The note is about a PDF's text made editable; a Word file from LibreOffice is a copy, not a rebuild.
+    if target_ext == "docx" and src_ext not in ("doc", "odt", "rtf"):
 
         caption += "\n\n" + i18n.t(lang, "converted_docx_note")
     return caption

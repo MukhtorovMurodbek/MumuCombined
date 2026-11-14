@@ -1273,10 +1273,10 @@ STRINGS = {
         "balance_recent": "Recent:",
         "balance_empty_hint": '/recharge adds credit whenever you want some.',
         "bot_short_description": (
-            "Converts pictures, raw photos, video, audio, documents, spreadsheets, subtitles and archives "
-            "— about 90 formats."
+            "Converts pictures, raw photos, video, audio, documents, presentations, spreadsheets, subtitles and archives "
+            "— about 100 formats."
         ),
-        "bot_description": 'Send a file and pick what to turn it into. Pictures, raw, video, audio, documents, spreadsheets, subtitles, archives — 90 formats in, 50 out.\n\nA HEIC from an iPhone becomes a JPG. Several pictures become one PDF. A PDF becomes pictures or text. /formats has the rest.\n\nAnything under 3 MB is free. Above that it is priced by size in ⚡ credit, bought with Stars and shown before you choose. A conversion the bot fails gives its credit back.\n\nEnglish, Uzbek and Russian. /privacy says what it keeps about you.',
+        "bot_description": 'Send a file and pick what to turn it into. Pictures, raw, video, audio, documents, slides, spreadsheets, subtitles, archives — about 100 formats in, 60 out.\n\nA HEIC from an iPhone becomes a JPG. Several pictures become one PDF. A PDF becomes pictures or text. /formats has the rest.\n\nAnything under 3 MB is free. Above that it is priced by size in ⚡ credit, bought with Stars and shown before you choose. A conversion the bot fails gives its credit back.\n\nEnglish, Uzbek and Russian. /privacy says what it keeps about you.',
 
         "privacy_heading": "🔒 Privacy",
         "privacy_kept_heading": "What this bot keeps:",
@@ -1374,7 +1374,7 @@ STRINGS = {
         "help_brief": (
             "How it works:\n"
             "\n"
-            "• Send me a file — a picture, camera raw photo, video, audio, document, spreadsheet, subtitles or archive — and choose what it should become. /formats lists everything.\n"
+            "• Send me a file — a picture, camera raw photo, video, audio, document, presentation, spreadsheet, subtitles or archive — and choose what it should become. /formats lists everything.\n"
             "• 📝 Text from a photo or a scanned PDF: send it and choose TXT or Searchable PDF.\n"
             "• A conversion costs ⚡ credit, and its price is shown before anything is taken. /recharge tops it up; /balance shows what you have and where it went.\n"
             "• Ideas or problems: /feedback — only the person who runs these bots reads it, and they can't reply.\n"
@@ -1466,10 +1466,10 @@ STRINGS = {
         "cancel_button_conversion": "🔄 The file waiting to convert",
 
         "start_greeting": "Hey! Send me a file and I'll convert it to another format.\n\n",
-        "help_text": "Send me a file and I'll convert it to another format — pictures, camera raw photos, video, audio, documents, spreadsheets, subtitles and archives.\n\nCommands:\n/convert - start a conversion (or just send a file directly)\n/formats - every format I read and write\n/balance (or /mystars) - your ⚡ credit and what it was spent on\n/cancel - stop something I'm waiting on you for (I'll ask which)\n/feedback - suggest something or report a problem; only whoever runs these bots reads it, and they cannot reply\n/recharge (or /donate) - top up your ⚡ credit\n/en, /uz, /rus - switch language (or /language, which asks)\n/paysupport - trouble with a payment\n/privacy - what I keep about you\n/terms - what I may be used for\n/deletemydata - delete everything I hold on you\n/start - what I do, and how to start\n/fullhelp - this full guide (/help - the short one)\n\nPrice in ⚡ credit:\n{pricing}\n\n⚠️ NOTE: Payments are final — Stars are NOT refunded, and ⚡ credit can NOT be withdrawn. A conversion's ⚡ is taken when it STARTS, and goes back to your balance only if the bot fails it.\n\n",
+        "help_text": "Send me a file and I'll convert it to another format — pictures, camera raw photos, video, audio, documents, presentations, spreadsheets, subtitles and archives.\n\nCommands:\n/convert - start a conversion (or just send a file directly)\n/formats - every format I read and write\n/balance (or /mystars) - your ⚡ credit and what it was spent on\n/cancel - stop something I'm waiting on you for (I'll ask which)\n/feedback - suggest something or report a problem; only whoever runs these bots reads it, and they cannot reply\n/recharge (or /donate) - top up your ⚡ credit\n/en, /uz, /rus - switch language (or /language, which asks)\n/paysupport - trouble with a payment\n/privacy - what I keep about you\n/terms - what I may be used for\n/deletemydata - delete everything I hold on you\n/start - what I do, and how to start\n/fullhelp - this full guide (/help - the short one)\n\nPrice in ⚡ credit:\n{pricing}\n\n⚠️ NOTE: Payments are final — Stars are NOT refunded, and ⚡ credit can NOT be withdrawn. A conversion's ⚡ is taken when it STARTS, and goes back to your balance only if the bot fails it.\n\n",
         "convert_start_prompt": (
             "Send me a file to convert, up to {max_mb} MB — a picture, a video, a "
-            "sound, a document, a spreadsheet or a subtitle file. Send several "
+            "sound, a document, a presentation, a spreadsheet or a subtitle file. Send several "
             "pictures at once and I can bind them into one PDF.\n\n"
             "/formats lists every format I know.\n\n"
             "Price in ⚡ credit:\n{pricing}\n\n/cancel to stop."
@@ -1501,7 +1501,7 @@ STRINGS = {
         "update_done_try_now": '✅ The update is done — go ahead and try again now.',
         "gift_granted": "🎁 We have passed 100 users, thank you! You get {amount} ⚡ of free credit, good until {date}. It pays for about {conversions} paid conversions in {convert} or big-file downloads in {download}. Your balance: /balance",
         "gift_claimed": "🎁 Gift received: {amount} ⚡ of free credit! Mumu bots have passed {users} users, and this is our thank-you.\nIt is good until {date} (UTC) and pays for about {conversions} paid conversions in {convert} or big-file downloads in {download}.\nYour balance: /balance",
-        "download_failed": "Couldn't download that file: {error}",
+        "download_failed": "Couldn't download that file: {error}\n\nThat's usually a hiccup on the way — please send the file again.",
         "unsupported_format": "\".{ext}\" isn't a format I convert — /formats lists the ones I do.",
         "not_for_this_file": "That one isn't available for this file (an album, or a PDF with no scanned page).",
         "file_too_large_convert": "That file is {size} MB, over the {max_mb} MB limit — can't convert it.",
@@ -1572,10 +1572,10 @@ STRINGS = {
         "job_reason_refused": "I couldn't convert that file: {detail}",
         "job_reason_timeout": 'That conversion ran past its {minutes}-minute limit, so I stopped it.',
         "job_reason_too_slow": "This one would take about {minutes} minutes to convert, and a conversion here can run for {limit}, so I stopped it now rather than make you wait for the limit. A shorter clip, or a lower resolution, will fit.",
-        "job_reason_crash": 'The conversion failed on my side.',
+        "job_reason_crash": 'The conversion failed on my side. You can try again — send the file once more.',
         "job_reason_no_memory": "This one needs more memory to convert than this server has — that happens with 4K and HDR video. Your file is fine: a version at 1080p or lower will convert.",
         "job_reason_too_large": 'The {target} came out at {mb} MB, more than the {limit} MB I can send back for this conversion — JPG, WEBP or AVIF will be far smaller.',
-        "job_reason_send_failed": 'The file converted, but sending it to you failed.',
+        "job_reason_send_failed": 'The file converted, but sending it to you failed. You can try again — send the file once more.',
         "job_reason_interrupted": 'I was restarted in the middle of that conversion. Send it again in a minute.',
         "unknown_order": "Unknown order.",
         "unrecognized_message": (
@@ -1586,6 +1586,7 @@ STRINGS = {
         "unknown_command": "I don't recognize that command. Send /start to see what I can do.",
 
         "category_document": "document",
+        "category_presentation": "presentation",
         "category_data": "data",
         "category_subtitle": "subtitle",
         "category_archive": "archive",
@@ -1600,7 +1601,9 @@ STRINGS = {
             "• iPhone photo (HEIC) → JPG or PNG\n"
             "• Any picture — or a whole album at once — into one PDF\n"
             "• PDF or EPUB → PNG, JPG or plain text\n"
-            "• Word document → PDF, HTML or Markdown\n"
+            "• PowerPoint: PPT ↔ PPTX ↔ PDF, a PDF as editable slides, or the slides as pictures\n"
+            "• Word: DOC ↔ DOCX ↔ ODT ↔ PDF, or HTML and Markdown\n"
+            "• Excel: XLS ↔ XLSX ↔ ODS, or CSV, JSON and PDF\n"
             "• CSV, JSON or XML → an XLSX spreadsheet\n"
             "• Camera raw (CR3, NEF, ARW, DNG…) → JPG, PNG or a 16-bit TIFF\n"
             "• A RAR or 7z your phone cannot open → ZIP\n"
@@ -1698,10 +1701,10 @@ STRINGS = {
         "balance_recent": 'Oxirgi amallar:',
         "balance_empty_hint": "/recharge orqali istalgan paytda balansni to'ldirishingiz mumkin.",
         "bot_short_description": (
-            "Rasm, kamera raw, video, audio, hujjat, jadval, subtitr va arxivlarni 90 ga yaqin format "
+            "Rasm, kamera raw, video, audio, hujjat, taqdimot, jadval, subtitr va arxivlarni 100 ga yaqin format "
             "orasida o'giradi."
         ),
-        "bot_description": "Fayl yuboring va qaysi formatga o'girishni tanlang. Rasm, kamera raw, video, audio, hujjat, jadval, subtitr, arxiv — 90 formatdan 50 formatga.\n\niPhone'dagi HEIC rasm — JPG ga. Bir nechta rasm — bitta PDF ga. PDF — rasm yoki matnga. Hammasi: /formats\n\n3 MB gacha bepul. Kattaroq fayl hajmiga qarab Stars bilan sotib olinadigan ⚡ kreditda to'lanadi, narx oldindan ko'rsatiladi. Bot xato qilsa, ⚡ balansga qaytadi.\n\nIngliz, o'zbek va rus tillarida. Nima saqlanishi: /privacy",
+        "bot_description": "Fayl yuboring va qaysi formatga o'girishni tanlang. Rasm, kamera raw, video, audio, hujjat, taqdimot, jadval, subtitr, arxiv — 100 ga yaqin formatdan 60 ga yaqin formatga.\n\niPhone'dagi HEIC rasm — JPG ga. Bir nechta rasm — bitta PDF ga. PDF — rasm yoki matnga. Hammasi: /formats\n\n3 MB gacha bepul. Kattaroq fayl hajmiga qarab Stars bilan sotib olinadigan ⚡ kreditda to'lanadi, narx oldindan ko'rsatiladi. Bot xato qilsa, ⚡ balansga qaytadi.\n\nIngliz, o'zbek va rus tillarida. Nima saqlanishi: /privacy",
 
         "privacy_heading": "🔒 Maxfiylik",
         "privacy_kept_heading": "Bu bot nimalarni saqlaydi:",
@@ -1756,7 +1759,7 @@ STRINGS = {
         "help_brief": (
             "Bot qanday ishlaydi:\n"
             "\n"
-            "• Menga fayl yuboring — rasm, kamera raw, video, audio, hujjat, jadval, subtitr yoki arxiv — va u nimaga aylanishini tanlang. Barcha formatlar: /formats\n"
+            "• Menga fayl yuboring — rasm, kamera raw, video, audio, hujjat, taqdimot, jadval, subtitr yoki arxiv — va u nimaga aylanishini tanlang. Barcha formatlar: /formats\n"
             "• 📝 Rasm yoki skanerlangan PDF dagi matn: faylni yuboring va TXT yoki Matnli PDF ni tanlang.\n"
             "• Har bir konvertatsiya ⚡ kredit turadi, narxi esa hech narsa yechilishidan oldin ko'rsatiladi. Kreditni /recharge bilan to'ldirasiz; /balance qancha qolgani va nimaga sarflanganini ko'rsatadi.\n"
             "• Taklif yoki muammo: /feedback — uni faqat bu botlarni yuritayotgan odam o'qiydi, javob qaytmaydi.\n"
@@ -1847,8 +1850,8 @@ STRINGS = {
         "cancel_item_conversion": "o'girilishi kutilayotgan .{ext} fayli",
         "cancel_button_conversion": "🔄 Konvertatsiyani kutayotgan fayl",
         "start_greeting": "Salom! Menga faylni yuboring va men uni boshqa formatga o'giraman.\n\n",
-        "help_text": "Menga fayl yuboring — uni boshqa formatga o'girib beraman: rasm, kamera raw, video, audio, hujjat, jadval, subtitr va arxivlar.\n\nBuyruqlar:\n/convert - konvertatsiyani boshlash (yoki shunchaki fayl yuboring)\n/formats - qo'llab-quvvatlanadigan barcha formatlar\n/balance (yoki /mystars) - ⚡ kreditingiz va u nimaga sarflangani\n/cancel - joriy amalni bekor qilish (bir nechta bo'lsa, qaysi birini so'rayman)\n/feedback - taklif yozish yoki muammo haqida xabar berish; uni faqat botlarni yuritayotgan odam o'qiydi, javob qaytmaydi\n/recharge (yoki /donate) - ⚡ kreditni to'ldirish\n/en, /uz, /rus - tilni almashtirish (yoki /language)\n/paysupport - to'lov bilan muammo\n/privacy - siz haqingizda nimalarni saqlayman\n/terms - botdan foydalanish shartlari\n/deletemydata - siz haqingizdagi hamma narsani o'chirish\n/start - bu bot nima qiladi va qanday boshlash kerak\n/fullhelp - shu to'liq qo'llanma (/help - qisqasi)\n\nNarxlar ⚡ kreditda:\n{pricing}\n\n⚠️ DIQQAT: To'lovlar QAYTARILMAYDI — to'langan Stars qaytarib berilmaydi, ⚡ kreditni esa yechib olib ham, Stars'ga aylantirib ham BO'LMAYDI. Konvertatsiya narxi u BOSHLANGANDA yechiladi va faqat bot tomonidagi xatolik tufayli bajarilmasa, ⚡ balansingizga qaytib tushadi.\n\n",
-        "convert_start_prompt": "O'girish uchun {max_mb} MB gacha fayl yuboring — rasm, kamera raw, video, audio, hujjat, jadval, subtitr yoki arxiv. Bir nechta rasmni birga yuborsangiz, ularni bitta PDF qilib beraman.\n\nBarcha formatlar: /formats\n\nNarxlar ⚡ kreditda:\n{pricing}\n\nBekor qilish uchun: /cancel",
+        "help_text": "Menga fayl yuboring — uni boshqa formatga o'girib beraman: rasm, kamera raw, video, audio, hujjat, taqdimot, jadval, subtitr va arxivlar.\n\nBuyruqlar:\n/convert - konvertatsiyani boshlash (yoki shunchaki fayl yuboring)\n/formats - qo'llab-quvvatlanadigan barcha formatlar\n/balance (yoki /mystars) - ⚡ kreditingiz va u nimaga sarflangani\n/cancel - joriy amalni bekor qilish (bir nechta bo'lsa, qaysi birini so'rayman)\n/feedback - taklif yozish yoki muammo haqida xabar berish; uni faqat botlarni yuritayotgan odam o'qiydi, javob qaytmaydi\n/recharge (yoki /donate) - ⚡ kreditni to'ldirish\n/en, /uz, /rus - tilni almashtirish (yoki /language)\n/paysupport - to'lov bilan muammo\n/privacy - siz haqingizda nimalarni saqlayman\n/terms - botdan foydalanish shartlari\n/deletemydata - siz haqingizdagi hamma narsani o'chirish\n/start - bu bot nima qiladi va qanday boshlash kerak\n/fullhelp - shu to'liq qo'llanma (/help - qisqasi)\n\nNarxlar ⚡ kreditda:\n{pricing}\n\n⚠️ DIQQAT: To'lovlar QAYTARILMAYDI — to'langan Stars qaytarib berilmaydi, ⚡ kreditni esa yechib olib ham, Stars'ga aylantirib ham BO'LMAYDI. Konvertatsiya narxi u BOSHLANGANDA yechiladi va faqat bot tomonidagi xatolik tufayli bajarilmasa, ⚡ balansingizga qaytib tushadi.\n\n",
+        "convert_start_prompt": "O'girish uchun {max_mb} MB gacha fayl yuboring — rasm, kamera raw, video, audio, hujjat, taqdimot, jadval, subtitr yoki arxiv. Bir nechta rasmni birga yuborsangiz, ularni bitta PDF qilib beraman.\n\nBarcha formatlar: /formats\n\nNarxlar ⚡ kreditda:\n{pricing}\n\nBekor qilish uchun: /cancel",
         "cancelled": "Bekor qilindi.",
         "btn_cancel_conversion": "✖️ Bekor qilish",
         "unknown_extension": "Fayl nomidan formatini aniqlab bo'lmadi — faylni kengaytmasi bilan (masalan, rasm.png) hujjat sifatida yuboring.",
@@ -1872,7 +1875,7 @@ STRINGS = {
         "update_done_try_now": "✅ Yangilanish tugadi — endi qaytadan urinib ko'rishingiz mumkin.",
         "gift_granted": "🎁 Bizda 100 dan ortiq foydalanuvchi bo'ldi, rahmat! Sizga {amount} ⚡ bepul kredit berildi, u {date} gacha amal qiladi. Bu {convert} orqali taxminan {conversions} ta pullik konvertatsiya yoki {download} orqali katta fayllarni yuklab olish uchun yetadi. Balansingiz: /balance",
         "gift_claimed": "🎁 Sovg'a: {amount} ⚡ bepul kredit! Mumu botlarida {users} dan ortiq foydalanuvchi bo'ldi, bu bizning minnatdorchiligimiz.\nU {date} gacha (UTC) amal qiladi va {convert} orqali taxminan {conversions} ta pullik konvertatsiya yoki {download} orqali katta fayllarni yuklab olish uchun yetadi.\nBalansingiz: /balance",
-        "download_failed": "Faylni yuklab bo'lmadi: {error}",
+        "download_failed": "Faylni yuklab bo'lmadi: {error}\n\nBu odatda yo'ldagi vaqtinchalik uzilish — faylni qaytadan yuboring.",
         "unsupported_format": '".{ext}" formatini o\'gira olmayman. Qo\'llab-quvvatlanadigan formatlar: /formats',
         "not_for_this_file": "Bu variant bu fayl uchun mavjud emas (albom yoki skanerlangan sahifasi yo'q PDF).",
         "file_too_large_convert": "Fayl hajmi {size} MB — bu {max_mb} MB chegarasidan katta, shuning uchun uni o'girib bo'lmaydi.",
@@ -1943,22 +1946,23 @@ STRINGS = {
         "job_reason_refused": "Faylni o'girib bo'lmadi: {detail}",
         "job_reason_timeout": "Konvertatsiya {minutes} daqiqalik vaqt chegarasidan oshib ketgani uchun to'xtatildi.",
         "job_reason_too_slow": "Bu faylni o'girish taxminan {minutes} daqiqa olardi, bu yerda esa bitta konvertatsiya ko'pi bilan {limit} daqiqa ishlaydi. Shuning uchun chegaragacha kuttirib o'tirmay, hozir to'xtatdim. Qisqaroq video yoki pastroq sifat bemalol sig'adi.",
-        "job_reason_crash": 'Konvertatsiya bot tomonidagi xatolik tufayli bajarilmadi.',
+        "job_reason_crash": "Konvertatsiya bot tomonidagi xatolik tufayli bajarilmadi. Qayta urinib ko'rishingiz mumkin — faylni yana bir bor yuboring.",
         "job_reason_no_memory": "Bu faylni o'girishga serverning xotirasi yetmadi — 4K va HDR videolarda shunday bo'ladi. Faylingizda muammo yo'q: uning 1080p yoki undan past sifatdagi nusxasi bemalol o'giriladi.",
         "job_reason_too_large": "{target} fayli {mb} MB chiqdi, bu konvertatsiya natijasini esa faqat {limit} MB gacha yubora olaman. JPG, WEBP yoki AVIF ancha kichik bo'ladi.",
-        "job_reason_send_failed": "Fayl o'girildi, lekin uni sizga yuborib bo'lmadi.",
+        "job_reason_send_failed": "Fayl o'girildi, lekin uni sizga yuborib bo'lmadi. Qayta urinib ko'rishingiz mumkin — faylni yana bir bor yuboring.",
         "job_reason_interrupted": 'Konvertatsiya vaqtida bot qayta ishga tushdi. Bir daqiqadan keyin faylni qaytadan yuboring.',
         "unknown_order": "Noma'lum buyurtma.",
         "unrecognized_message": 'Bu o\'girish mumkin bo\'lgan fayl emas — fayl yuboring yoki qabul qilinadigan formatlarni /formats orqali ko\'ring. Format nomini yozsangiz (masalan, "heic" yoki "epub"), uni nimaga o\'girish mumkinligini aytaman.',
         "unknown_command": "Bunday buyruq yo'q. Bot nimalar qila olishini bilish uchun /start yuboring.",
 
         "category_document": "hujjat",
+        "category_presentation": "taqdimot",
         "category_data": "ma'lumot",
         "category_subtitle": "subtitr",
         "category_archive": "arxiv",
         "formats_title": "📁 Qaysi formatlarni o'giraman",
         "formats_intro": "{sources} ta formatdan {targets} ta formatga — jami {pairs} xil yo'nalish. Fayl yuborsangiz, uni nimaga o'girish mumkinligini ko'rsataman; to'liq ro'yxat uchun quyidan turkumni tanlang.",
-        "formats_highlights": "Ko'pchilik bilmaydigan imkoniyatlar:\n• iPhone rasmi (HEIC) → JPG yoki PNG\n• Istalgan rasm — yoki butun albom — bitta PDF\n• PDF yoki EPUB → PNG, JPG yoki oddiy matn\n• Word hujjati → PDF, HTML yoki Markdown\n• CSV, JSON yoki XML → XLSX jadval\n• Kamera raw (CR3, NEF, ARW, DNG…) → JPG, PNG yoki 16 bitli TIFF\n• Telefon ocha olmaydigan RAR yoki 7z → ZIP\n• Subtitrlar: SRT, VTT va ASS bir-biriga, yoki faqat matn",
+        "formats_highlights": "Ko'pchilik bilmaydigan imkoniyatlar:\n• iPhone rasmi (HEIC) → JPG yoki PNG\n• Istalgan rasm — yoki butun albom — bitta PDF\n• PDF yoki EPUB → PNG, JPG yoki oddiy matn\n• PowerPoint: PPT ↔ PPTX ↔ PDF, PDF'ni tahrirlanadigan slaydlarga yoki slaydlarni rasmlarga\n• Word: DOC ↔ DOCX ↔ ODT ↔ PDF, yoki HTML va Markdown\n• Excel: XLS ↔ XLSX ↔ ODS, yoki CSV, JSON va PDF\n• CSV, JSON yoki XML → XLSX jadval\n• Kamera raw (CR3, NEF, ARW, DNG…) → JPG, PNG yoki 16 bitli TIFF\n• Telefon ocha olmaydigan RAR yoki 7z → ZIP\n• Subtitrlar: SRT, VTT va ASS bir-biriga, yoki faqat matn",
         "formats_reads": "O'qiydi",
         "formats_writes": "Yozadi",
         "formats_category_title": "📁 {category} fayllari",
@@ -2031,10 +2035,10 @@ STRINGS = {
         "balance_recent": "Последние операции:",
         "balance_empty_hint": '/recharge пополнит кредит в любой момент.',
         "bot_short_description": (
-            "Конвертирует картинки, raw-фото, видео, аудио, документы, таблицы, субтитры и архивы "
-            "— около 90 форматов."
+            "Конвертирует картинки, raw-фото, видео, аудио, документы, презентации, таблицы, субтитры и архивы "
+            "— около 100 форматов."
         ),
-        "bot_description": 'Пришлите файл и выберите, во что его превратить. Картинки, raw-фото, видео, аудио, документы, таблицы, субтитры и архивы — около 90 форматов на вход, 50 на выход.\n\nHEIC с iPhone становится JPG. Набор картинок — одним PDF. PDF — картинками или текстом. Весь список — /formats\n\nВсё меньше 3 МБ — бесплатно. Дороже — цена по размеру файла в ⚡ кредите, купленном за Stars, и видна до выбора. Если конвертация сорвётся по вине бота, кредит вернётся.\n\nАнглийский, узбекский и русский. /privacy — что бот о вас хранит.',
+        "bot_description": 'Пришлите файл и выберите, во что его превратить. Картинки, raw-фото, видео, аудио, документы, презентации, таблицы, субтитры и архивы — около 100 форматов на вход, 60 на выход.\n\nHEIC с iPhone становится JPG. Набор картинок — одним PDF. PDF — картинками или текстом. Весь список — /formats\n\nВсё меньше 3 МБ — бесплатно. Дороже — цена по размеру файла в ⚡ кредите, купленном за Stars, и видна до выбора. Если конвертация сорвётся по вине бота, кредит вернётся.\n\nАнглийский, узбекский и русский. /privacy — что бот о вас хранит.',
 
         "privacy_heading": "🔒 Конфиденциальность",
         "privacy_kept_heading": "Что бот хранит:",
@@ -2117,7 +2121,7 @@ STRINGS = {
         "help_brief": (
             "Как это устроено:\n"
             "\n"
-            "• Пришлите файл — картинку, raw-фото, видео, аудио, документ, таблицу, субтитры или архив — и выберите, во что его превратить. Все форматы: /formats\n"
+            "• Пришлите файл — картинку, raw-фото, видео, аудио, документ, презентацию, таблицу, субтитры или архив — и выберите, во что его превратить. Все форматы: /formats\n"
             "• 📝 Текст с фото или скана PDF: отправьте файл и выберите TXT или PDF с текстом.\n"
             "• Конвертация стоит ⚡ кредит, и цена видна до того, как что-то списано. Пополнить — /recharge; /balance покажет остаток и на что он ушёл.\n"
             "• Идеи или проблемы: /feedback — это прочитает только тот, кто ведёт этих ботов, ответа не будет.\n"
@@ -2207,10 +2211,10 @@ STRINGS = {
         "cancel_item_conversion": "\u0444\u0430\u0439\u043b .{ext}, \u043a\u043e\u0442\u043e\u0440\u044b\u0439 \u0432\u044b \u043a\u043e\u043d\u0432\u0435\u0440\u0442\u0438\u0440\u043e\u0432\u0430\u043b\u0438",
         "cancel_button_conversion": "🔄 Файл, ждущий конвертации",
         "start_greeting": "Здравствуйте! Пришлите мне файл, и я преобразую его в другой формат.\n\n",
-        "help_text": 'Пришлите мне файл, и я преобразую его в другой формат — картинки, raw-фото, видео, аудио, документы, таблицы, субтитры и архивы.\n\nКоманды:\n/convert - начать конвертацию (или просто отправьте файл напрямую)\n/formats - все форматы, которые я читаю и пишу\n/balance (или /mystars) - ваш ⚡ кредит и на что он потрачен\n/cancel - остановить то, чего я от вас жду (спрошу, что именно)\n/feedback - предложить идею или сообщить о проблеме; это прочитает только тот, кто ведёт этих ботов, ответа не будет\n/recharge (или /donate) - пополнить ⚡ кредит\n/en, /uz, /rus - сменить язык (или /language — он спрашивает)\n/paysupport - проблема с оплатой\n/privacy - что я о вас храню\n/terms - для чего можно пользоваться ботом\n/deletemydata - удалить всё, что я о вас храню\n/start - что этот бот делает и с чего начать\n/fullhelp - это полное руководство (/help - краткое)\n\nЦена в ⚡ кредите:\n{pricing}\n\n⚠️ ВНИМАНИЕ: платежи окончательные — Stars НЕ возвращаются, а ⚡ кредит НЕЛЬЗЯ вывести. ⚡ за конвертацию списывается при СТАРТЕ и возвращается на баланс, только если сбой по вине бота.\n\n',
+        "help_text": 'Пришлите мне файл, и я преобразую его в другой формат — картинки, raw-фото, видео, аудио, документы, презентации, таблицы, субтитры и архивы.\n\nКоманды:\n/convert - начать конвертацию (или просто отправьте файл напрямую)\n/formats - все форматы, которые я читаю и пишу\n/balance (или /mystars) - ваш ⚡ кредит и на что он потрачен\n/cancel - остановить то, чего я от вас жду (спрошу, что именно)\n/feedback - предложить идею или сообщить о проблеме; это прочитает только тот, кто ведёт этих ботов, ответа не будет\n/recharge (или /donate) - пополнить ⚡ кредит\n/en, /uz, /rus - сменить язык (или /language — он спрашивает)\n/paysupport - проблема с оплатой\n/privacy - что я о вас храню\n/terms - для чего можно пользоваться ботом\n/deletemydata - удалить всё, что я о вас храню\n/start - что этот бот делает и с чего начать\n/fullhelp - это полное руководство (/help - краткое)\n\nЦена в ⚡ кредите:\n{pricing}\n\n⚠️ ВНИМАНИЕ: платежи окончательные — Stars НЕ возвращаются, а ⚡ кредит НЕЛЬЗЯ вывести. ⚡ за конвертацию списывается при СТАРТЕ и возвращается на баланс, только если сбой по вине бота.\n\n',
         "convert_start_prompt": (
             "Пришлите файл для конвертации, до {max_mb} МБ — картинку, видео, звук, "
-            "документ, таблицу или файл субтитров. Пришлите несколько картинок "
+            "документ, презентацию, таблицу или файл субтитров. Пришлите несколько картинок "
             "сразу — соберу их в один PDF.\n\n"
             "/formats покажет все форматы, которые я знаю.\n\n"
             "Цена в ⚡ кредите:\n{pricing}\n\n"
@@ -2242,7 +2246,7 @@ STRINGS = {
         "update_done_try_now": '✅ Обновление завершено — можете пробовать снова.',
         "gift_granted": "🎁 Нас уже больше 100 — спасибо! Вам начислено {amount} ⚡ бесплатного кредита, он действует до {date}. Этого хватит примерно на {conversions} платных конвертаций в {convert} или на скачивание больших файлов в {download}. Ваш баланс: /balance",
         "gift_claimed": "🎁 Подарок: {amount} ⚡ бесплатного кредита! У Mumu ботов уже больше {users} пользователей — это наше спасибо.\nОн действует до {date} (UTC). Этого хватит на платные конвертации (около {conversions}) в {convert} или на скачивание больших файлов в {download}.\nВаш баланс: /balance",
-        "download_failed": "Не удалось скачать этот файл: {error}",
+        "download_failed": "Не удалось скачать этот файл: {error}\n\nОбычно это случайный сбой по дороге — пришлите файл ещё раз.",
         "unsupported_format": "«.{ext}» — не тот формат, который я конвертирую — /formats покажет те, что умею.",
         "not_for_this_file": "Для этого файла такой вариант недоступен (альбом или PDF без отсканированных страниц).",
         "file_too_large_convert": 'Этот файл весит {size} МБ, что больше лимита в {max_mb} МБ — конвертировать его нельзя.',
@@ -2313,10 +2317,10 @@ STRINGS = {
         "job_reason_refused": 'Не получилось конвертировать этот файл: {detail}',
         "job_reason_timeout": 'Конвертация не уложилась в {minutes} мин., и я её остановил.',
         "job_reason_too_slow": "На этот файл ушло бы около {minutes} мин., а конвертация здесь может идти не дольше {limit} мин., поэтому я остановил её сразу, а не заставил вас ждать до конца лимита. Подойдёт ролик покороче или в меньшем разрешении.",
-        "job_reason_crash": 'Конвертация сломалась на моей стороне.',
+        "job_reason_crash": 'Конвертация сломалась на моей стороне. Можно попробовать ещё раз — пришлите файл снова.',
         "job_reason_no_memory": "Для этого файла не хватило памяти сервера — так бывает с видео в 4K и HDR. С самим файлом всё в порядке: версия в 1080p или ниже сконвертируется.",
         "job_reason_too_large": '{target} получился на {mb} МБ, а по этой конвертации я могу отправить не больше {limit} МБ. JPG, WEBP или AVIF будут намного меньше.',
-        "job_reason_send_failed": 'Файл сконвертирован, но отправить его вам не вышло.',
+        "job_reason_send_failed": 'Файл сконвертирован, но отправить его вам не вышло. Можно попробовать ещё раз — пришлите файл снова.',
         "job_reason_interrupted": 'Меня перезапустили посреди конвертации. Пришлите файл снова через минуту.',
         "unknown_order": "Неизвестный заказ.",
         "unrecognized_message": (
@@ -2327,6 +2331,7 @@ STRINGS = {
         "unknown_command": "Я не знаю такую команду. Отправьте /start, чтобы увидеть, что я умею.",
 
         "category_document": "документ",
+        "category_presentation": "презентация",
         "category_data": "данные",
         "category_subtitle": "субтитры",
         "category_archive": "архив",
@@ -2341,7 +2346,9 @@ STRINGS = {
             "• Фото с iPhone (HEIC) → JPG или PNG\n"
             "• Любая картинка — или целый альбом сразу — в один PDF\n"
             "• PDF или EPUB → PNG, JPG или обычный текст\n"
-            "• Документ Word → PDF, HTML или Markdown\n"
+            "• PowerPoint: PPT ↔ PPTX ↔ PDF, PDF — в редактируемые слайды, слайды — в картинки\n"
+            "• Word: DOC ↔ DOCX ↔ ODT ↔ PDF, или HTML и Markdown\n"
+            "• Excel: XLS ↔ XLSX ↔ ODS, или CSV, JSON и PDF\n"
             "• CSV, JSON или XML → таблица XLSX\n"
             "• Субтитры: SRT, VTT и ASS между собой или просто их текст"
         ),
@@ -2776,7 +2783,7 @@ STRINGS = {
         "update_done_try_now": '✅ The update is done — go ahead and try again now.',
         "gift_granted": '🎁 We have passed 100 users, thank you! You get {amount} ⚡ of free credit, good until {date}. It pays for about {conversions} paid conversions in {convert} or big-file downloads in {download}. Your balance: /balance',
         "gift_claimed": "🎁 Gift received: {amount} ⚡ of free credit! Mumu bots have passed {users} users, and this is our thank-you.\nIt is good until {date} (UTC) and pays for about {conversions} paid conversions in {convert} or big-file downloads in {download}.\nYour balance: /balance",
-        "download_failed": "Couldn't download that: {error}",
+        "download_failed": "Couldn't download that: {error}\n\nYou can try again — send the link once more in a minute.",
         "download_blocked": "🚫 I tried every way I have of getting that one and the site turned all of them away. That is about where the request came from, not about your link. Try again in a bit — this usually sorts itself out.",
         "download_missing": "🔍 I couldn't find that post. Usually that means it was deleted, or it is from a private account. Public posts still work.",
         "download_too_big": "📦 That one is bigger than Telegram lets me send. Try a shorter clip.",
@@ -3009,7 +3016,7 @@ STRINGS = {
         "update_done_try_now": "✅ Yangilanish tugadi — endi qaytadan urinib ko'rishingiz mumkin.",
         "gift_granted": "🎁 Bizda 100 dan ortiq foydalanuvchi bo'ldi, rahmat! Sizga {amount} ⚡ bepul kredit berildi, u {date} gacha amal qiladi. Bu {convert} orqali taxminan {conversions} ta pullik konvertatsiya yoki {download} orqali katta fayllarni yuklab olish uchun yetadi. Balansingiz: /balance",
         "gift_claimed": "🎁 Sovg'a: {amount} ⚡ bepul kredit! Mumu botlarida {users} dan ortiq foydalanuvchi bo'ldi, bu bizning minnatdorchiligimiz.\nU {date} gacha (UTC) amal qiladi va {convert} orqali taxminan {conversions} ta pullik konvertatsiya yoki {download} orqali katta fayllarni yuklab olish uchun yetadi.\nBalansingiz: /balance",
-        "download_failed": "Buni yuklab bo'lmadi: {error}",
+        "download_failed": "Buni yuklab bo'lmadi: {error}\n\nQayta urinib ko'rishingiz mumkin — bir daqiqadan keyin havolani yana yuboring.",
         "download_blocked": '🚫 Buni olishning barcha yo‘llarini sinab ko‘rdim, sayt hammasini rad etdi. Bu havolangizga emas, so‘rov qayerdan kelganiga bog‘liq. Birozdan so‘ng qayta urinib ko‘ring — odatda o‘zi tuzalib ketadi.',
         "download_missing": '🔍 Bu postni topa olmadim. Odatda bu post o‘chirilgan yoki yopiq akkauntdan ekanini bildiradi. Ochiq postlar ishlayveradi.',
         "download_too_big": '📦 Bu fayl Telegram ruxsat beradigan hajmdan katta. Qisqaroq video sinab ko‘ring.',
@@ -3320,7 +3327,7 @@ STRINGS = {
         "update_done_try_now": '✅ Обновление завершено — можете пробовать снова.',
         "gift_granted": '🎁 Нас уже больше 100 — спасибо! Вам начислено {amount} ⚡ бесплатного кредита, он действует до {date}. Этого хватит примерно на {conversions} платных конвертаций в {convert} или на скачивание больших файлов в {download}. Ваш баланс: /balance',
         "gift_claimed": "🎁 Подарок: {amount} ⚡ бесплатного кредита! У Mumu ботов уже больше {users} пользователей — это наше спасибо.\nОн действует до {date} (UTC). Этого хватит на платные конвертации (около {conversions}) в {convert} или на скачивание больших файлов в {download}.\nВаш баланс: /balance",
-        "download_failed": "Не удалось это скачать: {error}",
+        "download_failed": "Не удалось это скачать: {error}\n\nМожно попробовать ещё раз — пришлите ссылку снова через минуту.",
         "download_blocked": '🚫 Я перебрал все способы достать это, и сайт отказал всем. Дело не в ссылке, а в том, откуда пришёл запрос. Попробуйте через некоторое время — обычно это проходит само.',
         "download_missing": '🔍 Не нашёл этот пост. Обычно это значит, что его удалили или он из закрытого аккаунта. Публичные посты работают.',
         "download_too_big": '📦 Это больше, чем Telegram позволяет мне отправить. Попробуйте ролик покороче.',

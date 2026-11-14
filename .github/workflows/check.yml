@@ -8,7 +8,7 @@
 # permissions, nothing is deployed from here. Railway builds from `main`
 # on its own; this does not gate it.
 #
-# Written 2026-10-07 and NOT yet run on GitHub.
+# Written 2026-10-07 for MumuCombined; runs on MumuBots since 2.1.7.
 name: check
 
 on:
@@ -27,11 +27,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: ffmpeg, bsdtar and the text-recognition language data
-        # The same packages as the Dockerfile, so the self-check also reads a test page's text.
+      - name: ffmpeg, bsdtar, the text-recognition language data and LibreOffice
+        # The same packages as the Dockerfile (less the CJK fonts), so the self-check also reads a
+        # test page's text and turns a PDF into slides and back.
         run: >-
           sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg libarchive-tools
           tesseract-ocr-eng tesseract-ocr-rus tesseract-ocr-uzb tesseract-ocr-uzb-cyrl
+          libreoffice-impress-nogui libreoffice-writer-nogui libreoffice-calc-nogui
+          fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-dejavu-core
       - name: Install requirements
         run: |
           python -m pip install --upgrade pip
@@ -40,4 +43,5 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
           TESSDATA_PREFIX: /usr/share/tesseract-ocr/5/tessdata
+          MUMU_CHECK_OFFICE: "1"
         run: python main.py --check

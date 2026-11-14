@@ -1,11 +1,12 @@
-# MumuCombined
+# MumuBots
 
-Five Telegram bots in one process.
+Five Telegram bots, in one process by default (`BOTS=convert` or `python main.py manager`
+runs any subset, so the same code can also run as separate services).
 
 | bot | what it does |
 |---|---|
 | **StickerBot** | Turns images, GIFs, videos and stickers into Telegram sticker packs, with co-editing by share link and bulk import from another pack or a WhatsApp export. |
-| **ConvertBot** | Converts files between about 90 formats: pictures, camera raw photos, video, audio, documents, e-books, spreadsheets, subtitles and archives, up to 2000 MB, and reads the text in a photo or a scanned PDF (TXT or a searchable PDF). |
+| **ConvertBot** | Converts files between about 100 formats: pictures, camera raw photos, video, audio, documents, presentations, e-books, spreadsheets, subtitles and archives, up to 2000 MB, and reads the text in a photo or a scanned PDF (TXT or a searchable PDF). |
 | **DownloaderBot** | Returns the media behind an Instagram, TikTok, Pinterest, Reddit or X link -- over 50 MB too, for ⚡ credit, for somebody who switched that on. |
 | **AnonBot** | A permanent personal link for receiving anonymous messages, with two-way replies threaded per conversation. |
 | **ManagerBot** | Private. Watches the other four, forwards their crashes and payments, and runs their owner-only commands from one chat. |
@@ -93,12 +94,15 @@ Owner-only: `/stars`, `/messageas`, `/dbdump`, `/status`.
 | **Pictures** | PNG, JPEG, WEBP, BMP, TIFF, ICO, HEIC/HEIF, AVIF, JPEG 2000, PSD, TGA, PCX, DDS, PPM, SGI, XBM, XPM, ICNS, QOI, BLP, SVG | PNG, JPEG, WEBP, PDF, ICO, TIFF, BMP, GIF, AVIF, HEIC, JPEG 2000, TGA, PPM, QOI, ICNS |
 | **Video** | MP4, MOV, M4V, AVI, WEBM, MKV, FLV, WMV, TS, M2TS, MPEG, 3GP, OGV, ASF, GIF, APNG | MP4, WEBM, MKV, MOV, AVI, GIF, animated WEBP, APNG, and the audio on its own |
 | **Audio** | MP3, WAV, OGG, Opus, M4A, AAC, FLAC, AIFF, WMA, AMR, AC3, MP2, AU, CAF, W64, VOC | MP3, M4A, AAC, OGG, Opus, WAV, FLAC, AIFF, WMA, AC3 |
-| **Documents** | PDF, DOCX, EPUB, MOBI, FB2, CBZ, XPS, Markdown, HTML, plain text | PDF, DOCX, PNG, JPEG, WEBP, TIFF, SVG, plain text, HTML, Markdown |
-| **Data** | CSV, TSV, JSON, YAML, XLSX, XML | JSON, CSV, TSV, YAML, XLSX, Markdown table, HTML table, PDF |
+| **Documents** | PDF, DOCX, DOC, ODT, RTF, EPUB, MOBI, FB2, CBZ, XPS, Markdown, HTML, plain text | PDF, DOCX, DOC, ODT, RTF, PNG, JPEG, WEBP, TIFF, SVG, plain text, HTML, Markdown; a PDF also as editable PPTX/ODP slides |
+| **Presentations** | PPTX, PPT, ODP (and PPS, PPSX, PPTM) | PDF, PPTX, PPT, ODP, a PNG or JPEG per slide, plain text |
+| **Data** | CSV, TSV, JSON, YAML, XLSX, XLS, ODS, XML | JSON, CSV, TSV, YAML, XLSX, XLS, ODS, Markdown table, HTML table, PDF |
 | **Subtitles** | SRT, VTT, ASS/SSA | SRT, VTT, ASS, or the transcript without timings |
 
 An album of pictures becomes one PDF; a many-page document becomes a zip of
-pages; a format whose library is missing on the host is left off the menu.
+pages; a format whose library is missing on the host is left off the menu. Office files
+(Word, PowerPoint, Excel and their OpenDocument twins) go through LibreOffice, run with
+macros off, a fresh profile per job and none of the bots' settings.
 Conversions under 3 MB are free. A larger one is quoted in ⚡ credit once the
 format is chosen — priced on the file and on what it is estimated to become —
 and the credit is taken when the conversion starts. From ⚡6; a 100 MB video to

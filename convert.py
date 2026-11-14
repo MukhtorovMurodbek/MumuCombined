@@ -26,8 +26,9 @@ DOCUMENT = "document"
 DATA = "data"
 SUBTITLE = "subtitle"
 ARCHIVE = "archive"
+PRESENTATION = "presentation"
 
-CATEGORIES = (IMAGE, VIDEO, AUDIO, DOCUMENT, DATA, SUBTITLE, ARCHIVE)
+CATEGORIES = (IMAGE, VIDEO, AUDIO, DOCUMENT, PRESENTATION, DATA, SUBTITLE, ARCHIVE)
 
 ALIASES = {
     "jpeg": "jpg", "jpe": "jpg", "jfif": "jpg",
@@ -45,6 +46,8 @@ ALIASES = {
     "aif": "aiff", "aifc": "aiff",
     "text": "txt",
     "tbz": "tbz2", "tb2": "tbz2", "taz": "tgz",
+    # A slide show is the same file as its deck; PowerPoint only opens it differently.
+    "pps": "ppt", "ppsx": "pptx", "pptm": "pptx",
 }
 
 COMPOUND_EXTENSIONS = (("tar.gz", "tgz"), ("tar.bz2", "tbz2"), ("tar.xz", "txz"))
@@ -75,10 +78,11 @@ SOURCES = {
         "wma", "amr", "ac3", "mp2", "au", "caf", "w64", "voc",
     ),
     DOCUMENT: (
-        "pdf", "docx", "epub", "mobi", "fb2", "cbz", "xps", "md",
+        "pdf", "docx", "doc", "odt", "rtf", "epub", "mobi", "fb2", "cbz", "xps", "md",
         "txt", "html",
     ),
-    DATA: ("csv", "tsv", "json", "yaml", "xlsx", "xml"),
+    PRESENTATION: ("pptx", "ppt", "odp"),
+    DATA: ("csv", "tsv", "json", "yaml", "xlsx", "xls", "ods", "xml"),
     SUBTITLE: ("srt", "vtt", "ass"),
 
     ARCHIVE: ("zip", "tar", "tgz", "tbz2", "txz", "7z", "rar"),
@@ -117,16 +121,24 @@ TARGETS_BY_CATEGORY = {
 
     ARCHIVE: ("zip", "7z", "tgz", "tar", "txz", "tbz2"),
 
+    PRESENTATION: ("pdf", "pptx", "ppt", "odp", "png", "jpg", "txt"),
+
 }
 
 TARGETS_BY_FORMAT = {
-    "pdf": ("docx", "png", "jpg", "txt", "ocrpdf", "html", "webp", "svg", "tiff"),
+    "pdf": ("docx", "pptx", "png", "jpg", "txt", "ocrpdf", "html", "webp", "svg", "tiff", "odp"),
     "epub": ("pdf", "docx", "txt", "html", "png", "jpg"),
     "mobi": ("pdf", "docx", "txt", "html", "png", "jpg"),
     "fb2": ("pdf", "docx", "txt", "html", "png", "jpg"),
     "xps": ("pdf", "docx", "txt", "html", "png", "jpg"),
     "cbz": ("pdf", "png", "jpg"),
-    "docx": ("pdf", "html", "md", "txt"),
+    "docx": ("pdf", "odt", "doc", "html", "md", "txt", "rtf", "png", "jpg"),
+    "doc": ("pdf", "docx", "odt", "txt", "rtf", "html", "png", "jpg"),
+    "odt": ("pdf", "docx", "doc", "txt", "rtf", "html", "png", "jpg"),
+    "rtf": ("pdf", "docx", "doc", "odt", "txt", "html"),
+    "xlsx": ("json", "csv", "ods", "xls", "yaml", "md", "html", "tsv", "pdf", "txt"),
+    "xls": ("xlsx", "csv", "ods", "pdf", "json", "html", "md", "yaml", "tsv", "txt"),
+    "ods": ("xlsx", "csv", "xls", "pdf", "json", "html", "md", "yaml", "tsv", "txt"),
     "md": ("pdf", "docx", "html", "txt"),
     "html": ("pdf", "docx", "txt", "png", "jpg"),
     "txt": ("pdf", "docx", "html"),
@@ -162,6 +174,8 @@ FORMAT_NEEDS = {
     **{raw: ("rawpy",) for raw in RAW_FORMATS},
 
     "ocrpdf": ("ocr",),
+
+    **{office: ("office",) for office in ("pptx", "ppt", "odp", "doc", "odt", "rtf", "xls", "ods")},
 }
 
 TARGET_NEEDS = {
@@ -170,6 +184,10 @@ TARGET_NEEDS = {
     (DOCUMENT, "docx"): ("pydocx", "mupdf"),
 
     (IMAGE, "txt"): ("ocr",),
+
+    # A PDF opened as slides needs LibreOffice's PDF import as well.
+    (DOCUMENT, "pptx"): ("office", "pdfimport"),
+    (DOCUMENT, "odp"): ("office", "pdfimport"),
 }
 
 ENCODERS = {
@@ -265,6 +283,14 @@ def probe() -> set[str]:
         found.add("bsdtar")
     if _ocr_available():
         found.add("ocr")
+    try:
+        import office_convert
+        if office_convert.soffice_path():
+            found.add("office")
+            if office_convert.has_pdf_import():
+                found.add("pdfimport")
+    except Exception:
+        logger.debug("LibreOffice could not be looked for", exc_info=True)
     _ENCODERS_PRESENT = _ffmpeg_encoders()
     if _ENCODERS_PRESENT:
         found.add("ffmpeg")
@@ -275,12 +301,12 @@ def probe() -> set[str]:
         ", ".join(sorted(found)) or "Pillow only", len(_ENCODERS_PRESENT),
     )
     absent = [name for name in ("mupdf", "heif", "openpyxl", "yaml", "markdown", "mammoth",
-                                "pydocx", "bsdtar", "rawpy", "ocr")
+                                "pydocx", "bsdtar", "rawpy", "ocr", "office")
               if name not in found]
     if absent:
         logger.warning(
             "Not installed, so those formats are not offered: %s. "
-            "pip install -r requirements.txt puts them back.", ", ".join(absent),
+            "pip install -r requirements.txt (LibreOffice: the Dockerfile) puts them back.", ", ".join(absent),
         )
     return found
 
@@ -568,6 +594,17 @@ _RATIO_BY_PAIR = {
     ("xps", "pdf"): 1.1, ("cbz", "pdf"): 1.05,
     ("pdf", "docx"): 0.6,
 
+    ("pptx", "pdf"): 0.8, ("pptx", "ppt"): 1.5, ("pptx", "odp"): 0.9, ("pptx", "txt"): 0.02,
+    ("ppt", "pptx"): 0.6, ("ppt", "pdf"): 0.6, ("ppt", "odp"): 0.6, ("ppt", "txt"): 0.01,
+    ("odp", "pptx"): 1.1, ("odp", "ppt"): 1.6, ("odp", "pdf"): 0.9, ("odp", "txt"): 0.02,
+    ("pdf", "pptx"): 0.8, ("pdf", "odp"): 0.8,
+    ("doc", "docx"): 0.4, ("doc", "pdf"): 1.5, ("doc", "odt"): 0.4, ("doc", "rtf"): 2.0, ("doc", "txt"): 0.1,
+    ("odt", "docx"): 1.1, ("odt", "pdf"): 3.0, ("odt", "doc"): 2.5, ("odt", "rtf"): 4.0, ("odt", "txt"): 0.2,
+    ("rtf", "docx"): 0.2, ("rtf", "pdf"): 0.5, ("rtf", "doc"): 0.6, ("rtf", "odt"): 0.2, ("rtf", "txt"): 0.05,
+    ("docx", "odt"): 1.1, ("docx", "doc"): 2.5, ("docx", "rtf"): 4.0,
+    ("xlsx", "ods"): 1.1, ("xlsx", "xls"): 2.5, ("xls", "xlsx"): 0.4, ("xls", "ods"): 0.4,
+    ("ods", "xlsx"): 1.1, ("ods", "xls"): 2.5, ("xls", "pdf"): 1.0, ("ods", "pdf"): 2.0,
+
     ("wav", "mp3"): 0.10, ("wav", "m4a"): 0.09, ("wav", "ogg"): 0.10,
     ("wav", "opus"): 0.07, ("wav", "aac"): 0.09, ("wav", "flac"): 0.6,
     ("flac", "mp3"): 0.25, ("flac", "wav"): 1.7, ("flac", "m4a"): 0.22,
@@ -601,6 +638,7 @@ _RATIO_BY_CATEGORY = {
     (formats.DATA, "xlsx"): 0.6, (formats.DATA, "pdf"): 2.0, (formats.DATA, "html"): 1.4,
     (formats.DATA, "md"): 1.1, (formats.DATA, "json"): 1.3, (formats.DATA, "yaml"): 1.1,
     (formats.SUBTITLE, "txt"): 0.7,
+    (formats.PRESENTATION, "png"): 2.0, (formats.PRESENTATION, "jpg"): 0.8,
 
     (formats.ARCHIVE, "zip"): 1.1, (formats.ARCHIVE, "tgz"): 1.1, (formats.ARCHIVE, "tbz2"): 1.05,
     (formats.ARCHIVE, "txz"): 0.95, (formats.ARCHIVE, "7z"): 0.9, (formats.ARCHIVE, "tar"): 1.5,
@@ -629,6 +667,12 @@ _WORK_BY_CATEGORY = {
     (formats.DOCUMENT, "jpg"): 1.4, (formats.DOCUMENT, "webp"): 1.4,
     (formats.DOCUMENT, "tiff"): 1.5, (formats.DOCUMENT, "svg"): 1.4,
     (formats.DOCUMENT, "docx"): 1.4,
+    # LibreOffice starts afresh for every conversion, which costs a few seconds whatever the size.
+    (formats.DOCUMENT, "odt"): 1.6, (formats.DOCUMENT, "doc"): 1.6, (formats.DOCUMENT, "rtf"): 1.6,
+    (formats.DOCUMENT, "pptx"): 2.0, (formats.DOCUMENT, "odp"): 2.0,
+    **{(formats.PRESENTATION, target): 1.8 for target in ("pdf", "pptx", "ppt", "odp", "txt")},
+    (formats.PRESENTATION, "png"): 2.0, (formats.PRESENTATION, "jpg"): 2.0,
+    (formats.DATA, "ods"): 1.4, (formats.DATA, "xls"): 1.4,
 
     (formats.VIDEO, "png"): 1.0, (formats.VIDEO, "jpg"): 1.0,
     (formats.VIDEO, "mp3"): 1.1, (formats.VIDEO, "m4a"): 1.1,
@@ -1243,6 +1287,10 @@ def convert(in_paths, src_ext: str, target_ext: str, work_dir, stem: str = "conv
                                        lang=ocr_lang, max_scanned=reading)
         if target_ext == "ocrpdf":
             raise ConversionError(f"A .{src_ext} file can't be turned into a searchable PDF.")
+
+    import office_convert
+    if office_convert.handles(src_ext, target_ext):
+        return office_convert.convert(in_path, src_ext, target_ext, work_dir, stem)
 
     if category == formats.IMAGE and src_ext in formats.RAW_FORMATS:
         import raw_convert
@@ -2128,6 +2176,260 @@ def convert(in_path, src_ext: str, target_ext: str, work_dir, stem: str = "conve
         return Result(out_path)
 
     raise ConversionError(f"Nothing here converts a .{src_ext} to .{target_ext}.")
+
+# ─── module: convert_bot.office_convert ──────────────────────────────────────
+"""Office files -- PowerPoint, Word, Excel and their OpenDocument twins -- through LibreOffice, run headless, one fresh process and one fresh profile per conversion.
+
+What LibreOffice writes directly: a deck as PPTX, PPT, ODP or PDF; a text document as DOCX, DOC, ODT, RTF or PDF; a spreadsheet as XLSX, XLS, ODS or PDF; and a PDF as an editable PPTX or ODP (its PDF import makes text boxes and shapes, not pictures). Everything else goes through one of those: a deck's pictures and text come from its PDF (doc_convert), an old spreadsheet's CSV or JSON from its XLSX (data_convert).
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import formats
+from convert_utils import Result, ConversionError, report
+
+PRESENTATIONS = ("pptx", "ppt", "odp")
+TEXT_DOCUMENTS = ("doc", "odt", "rtf")
+SPREADSHEETS = ("xls", "ods")
+
+# What LibreOffice writes itself, by the kind of file it opened.
+_DIRECT = {
+    "impress": ("pdf", "pptx", "ppt", "odp"),
+    "writer": ("pdf", "docx", "doc", "odt", "rtf"),
+    "calc": ("pdf", "xlsx", "xls", "ods"),
+    "pdf": ("pptx", "odp"),
+}
+
+# Targets only LibreOffice writes: any conversion into one of these comes here.
+ONLY_HERE = ("pptx", "ppt", "odp", "doc", "odt", "rtf", "xls", "ods")
+
+# The export filter by name where the bare extension would pick a less compatible one.
+_FILTERS = {
+    "pptx": "pptx:Impress MS PowerPoint 2007 XML",
+    "docx": "docx:MS Word 2007 XML",
+    "xlsx": "xlsx:Calc MS Excel 2007 XML",
+}
+
+SOFFICE_TIMEOUT_S = int(os.environ.get("CONVERT_OFFICE_TIMEOUT_SECONDS") or 600)
+
+# Exit status of a first start on a new profile: it was made, start again.
+_RESTART = 81
+
+# A new profile with macros off and nothing fetched from outside: whatever arrives in a
+# document stays inert. Written before the first start, so it is in force from the start.
+_PROFILE_SETTINGS = """<?xml version="1.0" encoding="UTF-8"?>
+<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop></item>
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop></item>
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value></prop></item>
+<item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="UseOpenCL" oor:op="fuse"><value>false</value></prop></item>
+<item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="FirstRun" oor:op="fuse"><value>false</value></prop></item>
+</oor:items>
+"""
+
+
+def soffice_path() -> "str | None":
+    """LibreOffice's own program, soffice.bin, where it can be found: started directly it is one process, which a timeout can stop, where the `soffice` launcher would leave it running."""
+    explicit = os.environ.get("CBOT_SOFFICE")
+    candidates = [explicit] if explicit else []
+    for name in ("soffice", "libreoffice"):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    candidates += ["/usr/lib/libreoffice/program/soffice", "/opt/libreoffice/program/soffice"]
+    for candidate in candidates:
+        if not candidate or not os.path.exists(candidate):
+            continue
+        real = Path(os.path.realpath(candidate))
+        if real.name == "soffice.bin":
+            return str(real)
+        binary = real.parent / "soffice.bin"
+        if binary.is_file():
+            return str(binary)
+    return None
+
+
+def has_pdf_import() -> bool:
+    """Whether this LibreOffice can open a PDF as slides (its pdfimport library is a separate part on some systems)."""
+    binary = soffice_path()
+    if not binary:
+        return False
+    program = Path(binary).parent
+    return any(program.glob("libpdfimportlo.so")) or any(program.glob("pdfimport*.dll")) \
+        or any(program.glob("libpdfimport*"))
+
+
+def family_of(src_ext: str) -> "str | None":
+    src_ext = formats.normalise(src_ext)
+    if src_ext in PRESENTATIONS:
+        return "impress"
+    if src_ext in TEXT_DOCUMENTS or src_ext == "docx":
+        return "writer"
+    if src_ext in SPREADSHEETS or src_ext == "xlsx":
+        return "calc"
+    if src_ext == "pdf":
+        return "pdf"
+    return None
+
+
+def handles(src_ext: str, target_ext: str) -> bool:
+    """Whether this conversion is LibreOffice's to do."""
+    src_ext, target_ext = formats.normalise(src_ext), formats.normalise(target_ext)
+    if src_ext in PRESENTATIONS or src_ext in TEXT_DOCUMENTS or src_ext in SPREADSHEETS:
+        return True
+    if target_ext in ONLY_HERE:
+        return family_of(src_ext) is not None
+    # A Word document's PDF -- and its pages as pictures -- keep the layout only when Word's own
+    # rules lay it out; without LibreOffice doc_convert re-flows it.
+    return src_ext == "docx" and target_ext in ("pdf", "png", "jpg") and formats.met("office")
+
+
+def _run(binary: str, source: Path, target_ext: str, out_dir: Path, profile: Path,
+         infilter: "str | None" = None) -> None:
+    command = [binary, "--headless", "--invisible", "--norestore", "--nolockcheck", "--nodefault",
+               "--nologo", "--nofirststartwizard", f"-env:UserInstallation={profile.as_uri()}"]
+    if infilter:
+        command.append(f"--infilter={infilter}")
+    command += ["--convert-to", _FILTERS.get(target_ext, target_ext), "--outdir", str(out_dir), str(source)]
+    # Only what it needs: none of the bots' tokens or database addresses reach a program that is
+    # opening somebody else's document.
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(profile),
+           "TMPDIR": str(profile), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "SAL_USE_VCLPLUGIN": "svp"}
+    for attempt in range(2):
+        try:
+            proc = subprocess.run(command, capture_output=True, text=True, env=env,
+                                  timeout=SOFFICE_TIMEOUT_S, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            raise ConversionError(
+                f"LibreOffice was still working on that after {SOFFICE_TIMEOUT_S // 60} minutes, so I stopped it."
+            ) from None
+        except OSError as exc:
+            raise ConversionError(f"LibreOffice couldn't be started here: {exc}") from None
+        if proc.returncode == _RESTART and attempt == 0:
+            continue
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or [""]
+            raise ConversionError(
+                f"LibreOffice couldn't convert that file (exit {proc.returncode}). {tail[0][:200]}".strip()
+            )
+        return
+
+
+def soffice(in_path, src_ext: str, target_ext: str, work_dir, infilter: "str | None" = None) -> Path:
+    """`in_path` written as `target_ext` by LibreOffice; the path of what it wrote, inside work_dir."""
+    binary = soffice_path()
+    if not binary:
+        raise ConversionError("Office documents can't be converted on this host: LibreOffice isn't installed.")
+    src_ext, target_ext = formats.normalise(src_ext), formats.normalise(target_ext)
+    room = Path(work_dir) / f"office-{os.getpid()}-{target_ext}"
+    shutil.rmtree(room, ignore_errors=True)
+    profile, inbox, outbox = room / "profile", room / "in", room / "out"
+    for folder in (profile / "user", inbox, outbox):
+        folder.mkdir(parents=True, exist_ok=True)
+    (profile / "user" / "registrymodifications.xcu").write_text(_PROFILE_SETTINGS, encoding="utf-8")
+    # A plain name: the result is named after the source, and a user's file name stays out of argv.
+    source = inbox / f"source.{src_ext}"
+    shutil.copyfile(in_path, source)
+    _run(binary, source, target_ext, outbox, profile, infilter)
+    produced = outbox / f"source.{target_ext}"
+    if not produced.is_file() or produced.stat().st_size == 0:
+        # LibreOffice says nothing and exits 0 when it can't open a file at all.
+        raise ConversionError(
+            f"LibreOffice couldn't open that .{src_ext}. It may be damaged, password-protected, "
+            "or not really a ." + src_ext + " file."
+        )
+    kept = Path(work_dir) / f"{room.name}.{target_ext}"
+    produced.replace(kept)
+    shutil.rmtree(room, ignore_errors=True)
+    return kept
+
+
+def convert(in_path, src_ext: str, target_ext: str, work_dir, stem: str = "converted") -> Result:
+    src_ext, target_ext = formats.normalise(src_ext), formats.normalise(target_ext)
+    work_dir = Path(work_dir)
+    family = family_of(src_ext)
+    if family is None:
+        raise ConversionError(f"Nothing here converts a .{src_ext} to .{target_ext}.")
+    out_path = work_dir / f"{stem}.{target_ext}"
+    report(0, 2)
+
+    if target_ext in _DIRECT[family]:
+        infilter = "impress_pdf_import" if family == "pdf" else None
+        written = soffice(in_path, src_ext, target_ext, work_dir, infilter)
+        written.replace(out_path)
+        report(2, 2)
+        return Result(out_path)
+
+    if family in ("impress", "writer"):
+        # Pictures, text and HTML of a deck or a document come from its PDF.
+        import doc_convert
+        pdf = soffice(in_path, src_ext, "pdf", work_dir)
+        report(1, 2)
+        try:
+            return doc_convert.convert(pdf, "pdf", target_ext, work_dir, stem)
+        finally:
+            pdf.unlink(missing_ok=True)
+
+    if family == "calc":
+        import data_convert
+        xlsx = soffice(in_path, src_ext, "xlsx", work_dir)
+        report(1, 2)
+        try:
+            return data_convert.convert(xlsx, "xlsx", target_ext, work_dir, stem)
+        finally:
+            xlsx.unlink(missing_ok=True)
+
+    raise ConversionError(f"Nothing here converts a .{src_ext} to .{target_ext}.")
+
+
+def selftest() -> None:
+    """A two-page PDF opened as slides, saved as PPTX, then as PDF again, and its text read back: main.py --check runs it, so an image whose LibreOffice can't do the conversions offered fails the build. SystemExit on failure."""
+    import tempfile
+    import pymupdf
+    with tempfile.TemporaryDirectory(prefix="office-check-") as folder:
+        folder = Path(folder)
+        doc = pymupdf.open()
+        for number in (1, 2):
+            page = doc.new_page(width=960, height=540)
+            page.insert_text((60, 120), f"Office check slide {number}", fontsize=36)
+        doc.save(folder / "check.pdf")
+        doc.close()
+        try:
+            deck = convert(folder / "check.pdf", "pdf", "pptx", folder, "deck").path
+            old = convert(deck, "pptx", "ppt", folder, "old").path
+            back = convert(old, "ppt", "pdf", folder, "back").path
+            with pymupdf.open(back) as again:
+                text = " ".join(page.get_text() for page in again)
+                pages = again.page_count
+        except ConversionError as exc:
+            print(f"  FAIL  LibreOffice: {exc}")
+            raise SystemExit(1) from None
+        if pages != 2 or "Office check slide 2" not in text:
+            print(f"  FAIL  LibreOffice: the round trip came back as {pages} page(s): {text[:120]!r}")
+            raise SystemExit(1)
+        # Writer and Calc are packages of their own: one document and one spreadsheet each way.
+        (folder / "check.html").write_text("<p>Office check document</p>", encoding="utf-8")
+        (folder / "check.csv").write_text("name,score\nOffice check,1\n", encoding="utf-8")
+        try:
+            odt = soffice(folder / "check.html", "html", "odt", folder)
+            doc = convert(odt, "odt", "doc", folder, "doc").path
+            docx = convert(doc, "doc", "docx", folder, "docx").path
+            text = Path(convert(docx, "docx", "pdf", folder, "docpdf").path)
+            ods = soffice(folder / "check.csv", "csv", "ods", folder)
+            xls = convert(ods, "ods", "xls", folder, "xls").path
+            csv = convert(xls, "xls", "csv", folder, "csv").path.read_text(encoding="utf-8")
+        except ConversionError as exc:
+            print(f"  FAIL  LibreOffice (Writer or Calc): {exc}")
+            raise SystemExit(1) from None
+        with pymupdf.open(text) as again:
+            document = " ".join(page.get_text() for page in again)
+        if "Office check document" not in document or "Office check,1" not in csv:
+            print(f"  FAIL  LibreOffice: Writer gave {document[:80]!r}, Calc gave {csv[:80]!r}")
+            raise SystemExit(1)
 
 # ─── module: convert_bot.archive_convert ─────────────────────────────────────
 """Archives: ZIP, TAR, TAR.GZ, TAR.BZ2, TAR.XZ and 7z -- and RAR, which is read and never written."""

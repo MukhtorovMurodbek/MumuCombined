@@ -219,8 +219,8 @@ text in a picture or a scanned PDF. Everything under
 
 Not held: the converted file once it has been sent back, and the contents of
 any file, at any point, in the database. Files are converted on the machine the
-bot runs on — by ffmpeg, Pillow, PyMuPDF and a handful of other libraries, all
-running locally — and are never handed to an outside service. That includes
+bot runs on — by ffmpeg, Pillow, PyMuPDF, LibreOffice and a handful of other
+libraries, all running locally — and are never handed to an outside service. That includes
 reading the text in a picture or a scanned PDF: it is recognised on the same
 machine, by the Tesseract engine inside PyMuPDF, never by an outside service,
 and the text it finds is kept no longer than the file it came from. A file over
