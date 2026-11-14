@@ -4832,6 +4832,7 @@ def decode(code: str) -> str:
 # ─── module: shared_features ─────────────────────────────────────────────────
 """Small self-contained features used by this bot -- kept in one file for convenience."""
 import asyncio
+import contextvars
 import gc
 import logging
 import os
@@ -6673,6 +6674,8 @@ async def track_activity(update, context) -> None:
     note_network_ok()
 
     live_message.note_update(update)
+    # Set for every update, so one person's never carries over to the next in the same task.
+    _not_counted.set(is_not_counted(getattr(update.effective_user, "id", None)))
     _count_tap(update)
     user = update.effective_user
     if not user:
@@ -6884,13 +6887,15 @@ def _asleep_in_window(now: float) -> float:
 def note_usage_update(user_id: int | None) -> None:
     """One update happened."""
     global _usage_updates, _usage_last_update, _usage_sleepable, _usage_max_gap
-    _usage_updates += 1
+    counted = not is_not_counted(user_id)
+    if counted:
+        _usage_updates += 1
     now = time.monotonic()
     gap = now - _usage_last_update
     _usage_sleepable += _asleep_in_window(now)
     _usage_last_update = now
     _usage_max_gap = max(_usage_max_gap, gap)
-    if user_id is not None and len(_usage_users) < 10000:
+    if counted and user_id is not None and len(_usage_users) < 10000:
         _usage_users.add(user_id)
 
 def note_job(ok: bool) -> None:
@@ -6942,8 +6947,36 @@ def tap_key(data) -> str:
         return f"{first}:{second}"
     return first
 
+# The owner's own accounts are left out of every count here -- button taps, the daily totals and the
+# 15-minute usage samples' updates and people: ADMIN_ID (and each bot's *_ADMIN_ID) plus STATS_IGNORE_IDS,
+# a comma-separated list for any other account of theirs. track_activity, first for every update, says
+# whose update this is; tasks the update starts (a conversion) inherit that. Activity records stay as
+# they are: broadcasts to "recently active" people read them.
+_not_counted: "contextvars.ContextVar[bool]" = contextvars.ContextVar("mumu_not_counted", default=False)
+_not_counted_ids: "frozenset[int] | None" = None
+
+def not_counted_ids() -> "frozenset[int]":
+    global _not_counted_ids
+    if _not_counted_ids is None:
+        ids = set()
+        for name, value in os.environ.items():
+            if name in ("ADMIN_ID", "STATS_IGNORE_IDS") or name.endswith("_ADMIN_ID"):
+                for word in re.split(r"[\s,]+", value or ""):
+                    if word.lstrip("-").isdigit():
+                        ids.add(int(word))
+        _not_counted_ids = frozenset(ids)
+    return _not_counted_ids
+
+def is_not_counted(user_id) -> bool:
+    try:
+        return user_id is not None and int(user_id) in not_counted_ids()
+    except (TypeError, ValueError):
+        return False
+
 def note_tap(key: str) -> None:
     """Count one tap (or one event, for the bots that count things that are not callbacks) under `key`."""
+    if _not_counted.get():
+        return
     try:
         if key in _taps:
             _taps[key] += 1
@@ -6960,6 +6993,8 @@ _stats: "dict[tuple, int]" = {}
 
 def note_stat(metric: str, key: str, n: int = 1) -> None:
     """Count one thing done -- note_stat("link_site", "tiktok") -- for today's anonymous totals."""
+    if _not_counted.get():
+        return
     try:
         item = (str(metric), str(key or "other"))
         if item in _stats:
