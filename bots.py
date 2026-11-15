@@ -4650,15 +4650,17 @@ async def _caption_wanted(user_id: int) -> bool:
         return True
     return await asyncio.to_thread(get_caption_enabled, user_id)
 
-def _remember_delivery(context, platform: str, url: str, lossless: bool) -> "str | None":
-    if _IN_GROUP.get():
-        return None  # no buttons in a group, so nothing for them to read back
+def _remember_delivery(context, platform: str, url: str, lossless: bool, choice=None) -> "str | None":
+    if _IN_GROUP.get() or choice == resolvers.AUDIO:
+        return None  # no buttons in a group, and none under a sound file, so nothing for them to read back
     memory = context.user_data.setdefault("redeliver", {})
     while len(memory) >= REDELIVER_MEMORY:
         memory.pop(next(iter(memory)))
     token = uuid.uuid4().hex[:10]
 
     memory[token] = {"platform": platform, "url": url, "lossless": lossless, "at": time.time()}
+    if choice is not None:
+        memory[token]["choice"] = choice  # "as a file" fetches the same quality again
     return token
 
 REDO_DELAY_BUCKETS = (
@@ -4762,13 +4764,15 @@ async def redeliver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     async def work():
         platform, url = remembered["platform"], remembered["url"]
-        if platform in ("reddit", "twitter") and not delivery_cache.has(update.effective_user.id, platform, url):
+        if platform in ("reddit", "twitter") and not delivery_cache.has(update.effective_user.id, platform, url) \
+                and remembered.get("choice") is None:
             handler = _handle_reddit if platform == "reddit" else _handle_twitter
             await handler(update, context, url, lossless=not remembered["lossless"])
             return
         await _resolve_and_send(
             update, context, platform, url,
             lossless_override=not remembered["lossless"], from_redo=True,
+            choice=remembered.get("choice"),
         )
 
     _spawn_download(context, update, work)
@@ -5019,6 +5023,8 @@ def _file_id_of(sent, kind: str, lossless: bool) -> "str | None":
             attached = sent.document
         elif kind == "video":
             attached = sent.video
+        elif kind == "audio":
+            attached = sent.audio
         else:
             photos = sent.photo
             attached = photos[-1] if photos else None
@@ -5029,7 +5035,8 @@ def _file_id_of(sent, kind: str, lossless: bool) -> "str | None":
 
 async def _send_media(update, context, items_with_paths, lang,
                       lossless: bool | None = None, redeliver_token: str | None = None,
-                      probing: "video.ProbeRun | None" = None) -> "list[tuple[str, str]] | None":
+                      probing: "video.ProbeRun | None" = None,
+                      title: "str | None" = None, duration: "int | None" = None) -> "list[tuple[str, str]] | None":
     """Put what was resolved into the chat."""
     caption = None
     if await _caption_wanted(update.effective_user.id):
@@ -5079,6 +5086,13 @@ async def _send_media(update, context, items_with_paths, lang,
                     read_timeout=120, write_timeout=120,
                     **shape,
                 )
+            elif item.kind == "audio":
+                ext = os.path.splitext(item.filename or path or "")[1] or ".m4a"
+                sent = await message.reply_audio(
+                    f, caption=caption, reply_markup=keyboard, title=(title or None) and title[:64],
+                    filename=_audio_filename(title, ext), duration=duration or None,
+                    read_timeout=120, write_timeout=120,
+                )
             else:
                 sent = await message.reply_photo(
                     f, caption=caption, reply_markup=keyboard,
@@ -5127,6 +5141,11 @@ async def _send_media(update, context, items_with_paths, lang,
             i18n.t(lang, "album_delivered", count=len(items_with_paths)),
             reply_markup=keyboard)
     return sent_ids
+
+def _audio_filename(title: "str | None", ext: str) -> str:
+    """A sound file's name: its video's title, with nothing a file name can't hold."""
+    stem = "".join(ch for ch in (title or "") if ch.isalnum() or ch in " -_.,()'&").strip(" .")[:60]
+    return (stem or "audio") + ext
 
 async def _store_sent_files(user_id: int, platform: str, url: str, lossless: bool, sent) -> None:
     """After a delivery from bytes: keep the file ids Telegram gave (sent_files.py), so the next person who sends this post gets it without a download."""
@@ -5222,8 +5241,11 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
                             platform: str, url: str, status=None,
                             quiet_if_missing: bool = False,
                             lossless_override: bool | None = None,
-                            from_redo: bool = False) -> bool:
-    """The whole download path: pick a route that is working, fetch, send."""
+                            from_redo: bool = False,
+                            choice=None, title: "str | None" = None, duration: "int | None" = None) -> bool:
+    """The whole download path: pick a route that is working, fetch, send. `choice` is what was picked in the quality picker (None: the default version); a pick is always fetched afresh, since the kept files and the stored file ids are of the default version."""
+    if choice == resolvers.AUDIO:
+        lossless_override = False  # a sound file is a sound file
     lang = await i18n.get_lang(update.effective_user.id, context)
 
     refusal = await refuse_new_work(
@@ -5242,7 +5264,8 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
     else:
         await status.set(context.bot, i18n.t(lang, "fetching"))
 
-    resent = await _resend_by_file_id(update, context, lang, status, platform, url, lossless_override)
+    resent = None if choice is not None else await _resend_by_file_id(
+        update, context, lang, status, platform, url, lossless_override)
     if resent is not None:
         if resent:
             await _after_send(update, context, lang)
@@ -5255,7 +5278,7 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
     async with _user_slot(update.effective_user.id), _slots(), lifecycle.busy(
             update.effective_chat.id, i18n.t(lang, "restarting_send_again")):
 
-        cached = delivery_cache.take(update.effective_user.id, platform, url)
+        cached = None if choice is not None else delivery_cache.take(update.effective_user.id, platform, url)
         if from_redo and delivery_cache.usable(update.effective_user.id):
             note_tap("redo.cache.hit" if cached is not None else "redo.cache.miss")
         if cached is not None:
@@ -5288,13 +5311,13 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 await status.set(context.bot, i18n.t(lang, "download_short_on_space"))
                 return False
             try:
-                resolved = await resolvers.resolve(platform, url)
+                resolved = await resolvers.resolve(platform, url, choice=choice)
             except resolvers.NothingWorked as exc:
                 logger.info("no route worked for %s: %s", platform, exc)
                 if exc.kind == "missing" and quiet_if_missing:
                     return False
 
-                if exc.kind == "too_big" and large_files.CONFIGURED:
+                if exc.kind == "too_big" and large_files.CONFIGURED and choice is None:
                     return await _large_download(update, context, status, lang, platform, url)
                 if exc.kind not in ("missing", "too_big"):
                     note_job(False)
@@ -5318,24 +5341,26 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
                     delivered_lossless = await _lossless_wanted(update.effective_user.id)
                 else:
                     delivered_lossless = lossless_override
-                token = _remember_delivery(context, platform, url, delivered_lossless)
+                token = _remember_delivery(context, platform, url, delivered_lossless, choice)
                 sent = await _send_media(update, context, list(zip(items, paths)), lang,
-                                         lossless=delivered_lossless, redeliver_token=token)
+                                         lossless=delivered_lossless, redeliver_token=token,
+                                         title=title or resolved.title, duration=duration)
                 await status.delete(context.bot)
                 note_job(True)
                 note_stat("link_site", platform)
                 for item in items:
                     note_stat("link_media", f"{platform}:{getattr(item, 'kind', None) or 'other'}")
 
-                kept = delivery_cache.keep(update.effective_user.id, platform, url,
-                                           list(zip(items, paths)), _cache_floor_mb())
-                if delivery_cache.usable(update.effective_user.id):
-                    note_tap("cache.kept" if kept else "cache.not_kept")
-                if kept:
-                    paths.clear()
-                await _store_sent_files(update.effective_user.id, platform, url, delivered_lossless, sent)
+                if choice is None:
+                    kept = delivery_cache.keep(update.effective_user.id, platform, url,
+                                               list(zip(items, paths)), _cache_floor_mb())
+                    if delivery_cache.usable(update.effective_user.id):
+                        note_tap("cache.kept" if kept else "cache.not_kept")
+                    if kept:
+                        paths.clear()
+                    await _store_sent_files(update.effective_user.id, platform, url, delivered_lossless, sent)
             except net.TooLarge as exc:
-                if not large_files.CONFIGURED:
+                if not large_files.CONFIGURED or choice is not None:
                     await status.set(context.bot, str(exc), **NO_PREVIEW)
                     return False
                 for path in paths:
@@ -5559,10 +5584,15 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not allowance["allowed"]:
             await update.message.reply_text(_allowance_message(lang, allowance))
             return
-        await asyncio.to_thread(record_download, update.effective_user.id, platform)
+        # A link that gets the quality picker is counted when a version is picked, not when the card is shown.
+        picking = platform in resolvers.PICK_PLATFORMS and not _IN_GROUP.get()
+        if not picking:
+            await asyncio.to_thread(record_download, update.effective_user.id, platform)
 
         async def work():
-            if platform == "reddit":
+            if picking:
+                await _offer_choices(update, context, platform, url)
+            elif platform == "reddit":
                 await _handle_reddit(update, context, url)
             elif platform == "twitter":
                 await _handle_twitter(update, context, url)
@@ -5575,6 +5605,123 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not spawned:
             _clear_in_flight(key, stamp)
+
+# ---------------------------------------------------------------------------
+# The quality picker (private chats; resolvers.PICK_PLATFORMS)
+# ---------------------------------------------------------------------------
+# The link gets a card -- the video's picture and title, a button per quality with its size, and one for
+# the sound -- and the download starts when a button is tapped. The buttons stay, so the sound can be taken
+# after the video. When the versions can't be listed, the link is downloaded the default way at once.
+# In a group, links never get the card (group_router): they come as the default version.
+PICK_PREFIX = "pick:"
+PICK_MEMORY = 5
+PICK_AUDIO = "a"
+
+def _remember_pick(context, platform: str, url: str, found: "resolvers.Choices") -> str:
+    memory = context.user_data.setdefault("picks", {})
+    while len(memory) >= PICK_MEMORY:
+        memory.pop(next(iter(memory)))
+    token = uuid.uuid4().hex[:10]
+    memory[token] = {"platform": platform, "url": url, "title": (found.title or "")[:200],
+                     "duration": found.duration,
+                     "qualities": [quality for quality, _ in found.qualities],
+                     "audio": bool(found.audio), "at": time.time()}
+    return token
+
+def _size_label(lang: str, size: int) -> str:
+    mb = size / (1024 * 1024)
+    return i18n.t(lang, "pick_size_mb", mb=f"{mb:.1f}" if mb < 10 else f"{mb:.0f}")
+
+def _pick_kb(lang: str, token: str, found: "resolvers.Choices") -> InlineKeyboardMarkup:
+    buttons = [InlineKeyboardButton(f"🎬 {quality}p · {_size_label(lang, size)}",
+                                    callback_data=f"{PICK_PREFIX}{token}:{quality}")
+               for quality, size in found.qualities]
+    rows = [buttons[n:n + 2] for n in range(0, len(buttons), 2)]
+    if found.audio:
+        rows.append([InlineKeyboardButton(f"{i18n.t(lang, 'pick_audio')} · {_size_label(lang, found.audio)}",
+                                          callback_data=f"{PICK_PREFIX}{token}:{PICK_AUDIO}")])
+    return InlineKeyboardMarkup(rows)
+
+def _pick_caption(lang: str, found: "resolvers.Choices") -> str:
+    lines = []
+    if found.title:
+        lines.append("🎞 " + found.title[:300])
+    if found.duration:
+        minutes, seconds = divmod(int(found.duration), 60)
+        hours, minutes = divmod(minutes, 60)
+        lines.append("⏱ " + (f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"))
+    lines.append(i18n.t(lang, "pick_prompt"))
+    return "\n".join(lines[:-1]) + ("\n\n" if len(lines) > 1 else "") + lines[-1]
+
+async def _offer_choices(update: Update, context: ContextTypes.DEFAULT_TYPE, platform: str, url: str) -> None:
+    lang = await i18n.get_lang(update.effective_user.id, context)
+    status = await LiveMessage.reply_to(update.effective_message, i18n.t(lang, "fetching"))
+    found = await resolvers.choices(platform, url)
+    if found is None:
+        note_tap("pick.not_listed")
+        await asyncio.to_thread(record_download, update.effective_user.id, platform)
+        await _resolve_and_send(update, context, platform, url, status=status)
+        return
+    token = _remember_pick(context, platform, url, found)
+    caption, keyboard = _pick_caption(lang, found), _pick_kb(lang, token, found)
+    message = update.effective_message
+    card = None
+    if found.thumbnail:
+        try:
+            card = await message.reply_photo(found.thumbnail, caption=caption, reply_markup=keyboard)
+        except Exception as exc:  # Telegram could not fetch the picture: the card goes without it
+            logger.info("The picker's picture was not sent (%s)", type(exc).__name__)
+    if card is None:
+        await message.reply_text(caption, reply_markup=keyboard, **NO_PREVIEW)
+    await status.delete(context.bot)
+    note_tap("pick.offered")
+
+def _parse_pick(data: str) -> "tuple[str, object] | None":
+    token, _, wanted = data[len(PICK_PREFIX):].partition(":")
+    if wanted == PICK_AUDIO:
+        return token, resolvers.AUDIO
+    return (token, int(wanted)) if wanted.isdigit() else None
+
+async def pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A button of the quality picker."""
+    query = update.callback_query
+    user_id, chat_id = update.effective_user.id, update.effective_chat.id
+    lang = await i18n.get_lang(user_id, context)
+    parsed = _parse_pick(query.data or "")
+    remembered = context.user_data.get("picks", {}).get(parsed[0]) if parsed else None
+    choice = parsed[1] if parsed else None
+    if not remembered or (choice == resolvers.AUDIO and not remembered.get("audio")) or (
+            choice != resolvers.AUDIO and choice not in remembered.get("qualities", ())):
+        note_tap("pick.expired")
+        await query.answer(i18n.t(lang, "pick_expired"), show_alert=True)
+        return
+    platform, url = remembered["platform"], remembered["url"]
+    key = (chat_id, user_id, platform, url, choice)
+    if _already_in_flight(key):
+        await query.answer("👌")
+        return
+    refusal = await refuse_new_work(lang, user_id, chat_id)
+    if refusal:
+        await query.answer(refusal, show_alert=True)
+        return
+    if _user_pending.get(user_id, 0) >= MAX_PENDING_PER_USER:
+        await query.answer(i18n.t(lang, "download_queue_full", count=MAX_PENDING_PER_USER), show_alert=True)
+        return
+    allowance = await asyncio.to_thread(download_allowance, user_id)
+    if not allowance["allowed"]:
+        await query.answer()
+        await query.message.reply_text(_allowance_message(lang, allowance))
+        return
+    await query.answer()
+    await asyncio.to_thread(record_download, user_id, platform)
+    note_tap("pick.audio" if choice == resolvers.AUDIO else f"pick.{choice}p")
+    _in_flight[key] = time.monotonic()
+
+    async def work():
+        await _resolve_and_send(update, context, platform, url, choice=choice, title=remembered.get("title"),
+                                duration=remembered.get("duration"))
+
+    _spawn_download(context, update, work, in_flight=key)
 
 # ---------------------------------------------------------------------------
 # Group chats (basic; 2.2.0 adds per-group /settings and channels)
@@ -5688,11 +5835,12 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(i18n.t(lang, "unknown_command"))
 
 async def _delete_my_data_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """The shared erase button, and what only this bot holds on top of what it erases: the person's kept delivery (delivery_cache.py), and the memory the redo buttons read their links from."""
+    """The shared erase button, and what only this bot holds on top of what it erases: the person's kept delivery (delivery_cache.py), and the memory the redo and quality buttons read their links from."""
     query = update.callback_query
     if query is not None and query.data == ERASE_PREFIX + "yes":
         delivery_cache.forget_user(update.effective_user.id)
         context.user_data.pop("redeliver", None)
+        context.user_data.pop("picks", None)
     return await delete_my_data_chosen(update, context)
 
 async def _post_init(application):
@@ -5804,6 +5952,7 @@ def main():
     app.add_handler(CallbackQueryHandler(lossless_toggle_callback, pattern="^lossless:"))
     app.add_handler(CallbackQueryHandler(large_toggle_callback, pattern="^large:"))
     app.add_handler(CallbackQueryHandler(redeliver_callback, pattern="^redo:"))
+    app.add_handler(CallbackQueryHandler(pick_callback, pattern="^pick:"))
     app.add_handler(CallbackQueryHandler(merge_callback, pattern="^merge:"))
     app.add_handler(CallbackQueryHandler(cancel_choice_callback, pattern="^cancelpick:"))
     app.add_handler(CallbackQueryHandler(language_chosen, pattern="^setlang:"))

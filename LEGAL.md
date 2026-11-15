@@ -256,7 +256,8 @@ Reddit or X and sends back the media behind it. Everything under
   nobody uses are deleted after 90 days. A reference is not about anyone: it holds
   no user id, chat, username, link, platform name or caption, and the scrambled
   name cannot be turned back into the link.
-- **The links of your last five downloads**, so the buttons under them work, until
+- **The links of your last five downloads**, and of the last five links you were
+  asked a quality for (with the video's title), so the buttons under them work, until
   you have not used the bot for 12 hours. Every link is cut down to the address of
   the post before the bot does anything else with it: the share-tracking parts that
   apps add when you copy a link (such as `igsh`, `utm_source` or `si`) are removed,

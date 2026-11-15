@@ -1017,6 +1017,82 @@ def sizes_known(info: dict) -> bool:
     duration = info.get("duration") or 0
     return any(_size_of(fmt, duration) for fmt in info.get("formats") or () if _wanted(fmt) and _has(fmt, "vcodec"))
 
+# The quality picker (private chats, for the sites whose routes list their versions: resolvers.PICK_PLATFORMS).
+# A choice is AUDIO or a quality as people name it: the site's own label ("480p" -- it calls its 608x1080
+# versions that), else the shorter side of the picture, so a vertical 1080x1920 clip is "1080p". The default
+# download (no choice) is unchanged: the tallest picture up to MAX_HEIGHT that fits.
+AUDIO = "audio"
+PICK_MIN_QUALITY = 240
+PICK_MAX_QUALITIES = 5
+
+def quality_of(fmt: dict) -> int:
+    label = re.match(r"(\d{3,4})p", str(fmt.get("format_note") or ""))
+    if label:
+        return int(label.group(1))
+    width, height = fmt.get("width") or 0, fmt.get("height") or 0
+    return min(width, height) if width and height else height
+
+def _sound_rank(fmt: dict) -> tuple:
+    """The video's own sound first (not a dubbed track, nor the dynamic-range-compressed copy), then as _audio_rank."""
+    own = (fmt.get("language_preference") or 0) >= 0
+    compressed = "drc" in str(fmt.get("format_id") or "").lower()
+    return (own, not compressed) + _audio_rank(fmt)
+
+def _best_audio(formats) -> "dict | None":
+    audios = [fmt for fmt in formats if _has(fmt, "acodec") and not _has(fmt, "vcodec")]
+    return max(audios, key=_sound_rank) if audios else None
+
+def _picture_of(formats, quality: int) -> "dict | None":
+    """The version to fetch for `quality`: H.264 first (every Telegram app plays it), then one whose size is stated (a plain file, not a stream: the size on the button is then the real one)."""
+    pictures = [fmt for fmt in formats if _has(fmt, "vcodec") and quality_of(fmt) == quality]
+    return max(pictures, key=lambda fmt: (_video_rank(fmt)[0], bool(fmt.get("filesize")),
+                                          _has(fmt, "acodec"), fmt.get("tbr") or 0)) if pictures else None
+
+def _choice_format(formats, choice, duration) -> "tuple[str, int | None] | None":
+    """(yt-dlp format id, size in bytes or None) for one choice, or None when the video has no such version."""
+    audio = _best_audio(formats)
+    if choice == AUDIO:
+        return (audio["format_id"], _size_of(audio, duration)) if audio else None
+    picture = _picture_of(formats, choice)
+    if picture is None:
+        return None
+    size = _size_of(picture, duration)
+    if _has(picture, "acodec"):
+        return picture["format_id"], size
+    if audio is None:
+        return None
+    extra = _size_of(audio, duration)
+    return (f"{picture['format_id']}+{audio['format_id']}",
+            size + extra if size is not None and extra is not None else None)
+
+def choices_of(info: dict, budget_bytes: int) -> dict:
+    """What the picker can offer for a video yt-dlp has read: {"qualities": [(quality, bytes)], "audio": bytes or None}, only the versions whose stated size fits `budget_bytes` (a version with no stated size is left out: it could not be promised)."""
+    duration = info.get("duration") or 0
+    formats = [fmt for fmt in info.get("formats") or () if _wanted(fmt)]
+    room = budget_bytes * SIZE_MARGIN
+    found = sorted({quality_of(fmt) for fmt in formats if _has(fmt, "vcodec")})
+    qualities = []
+    for quality in found:
+        if not PICK_MIN_QUALITY <= quality <= MAX_HEIGHT:
+            continue
+        chosen = _choice_format(formats, quality, duration)
+        if chosen and chosen[1] is not None and chosen[1] <= room:
+            qualities.append((quality, chosen[1]))
+    audio = _choice_format(formats, AUDIO, duration)
+    return {"qualities": qualities[-PICK_MAX_QUALITIES:],
+            "audio": audio[1] if audio and audio[1] is not None and audio[1] <= room else None}
+
+def pick_choice(info: dict, choice, budget_bytes: int) -> str:
+    """The yt-dlp format id for what was picked; TooLarge when that version is not there or does not fit."""
+    duration = info.get("duration") or 0
+    formats = [fmt for fmt in info.get("formats") or () if _wanted(fmt)]
+    chosen = _choice_format(formats, choice, duration)
+    if chosen is None:
+        raise TooLarge("That version of the video is not there any more.")
+    if chosen[1] is not None and chosen[1] > budget_bytes * SIZE_MARGIN:
+        raise TooLarge("That version is over this bot's size limit.")
+    return chosen[0]
+
 def _format_selector(max_mb: int | None = None) -> str:
     mb = MAX_DOWNLOAD_MB if max_mb is None else max_mb
     return (
@@ -1096,8 +1172,8 @@ def ytdlp_version() -> "str | None":
                 return None
     return None
 
-def download_video(url: str, out_dir: str, max_mb: int | None = None, cancel=None) -> str:
-    """Downloads the video at `url` into `out_dir`, returns the local file path."""
+def download_video(url: str, out_dir: str, max_mb: int | None = None, cancel=None, choice=None) -> str:
+    """Downloads the video at `url` into `out_dir`, returns the local file path. `choice` is what was picked in the quality picker (AUDIO or a quality), None for the default version."""
     mb = MAX_DOWNLOAD_MB if max_mb is None else max_mb
     with _slot():
         import yt_dlp
@@ -1117,7 +1193,7 @@ def download_video(url: str, out_dir: str, max_mb: int | None = None, cancel=Non
 
         path = None
         try:
-            path = _download(yt_dlp, url, mb, outtmpl, stop_if_asked, match_filter)
+            path = _download(yt_dlp, url, mb, outtmpl, stop_if_asked, match_filter, choice)
             stop_if_asked()
             return path
         except BaseException:
@@ -1135,8 +1211,24 @@ def _blocked(exc: Exception, site: str) -> Exception:
         return BlockedBySource(str(exc), "login_required", site)
     return exc
 
-def _download(yt_dlp, url: str, mb: int, outtmpl: str, progress_hook, match_filter) -> str:
-    """Read the video's versions first, choose the best one that fits `mb` (pick_format), then fetch only that one."""
+def read_info(url: str) -> dict:
+    """What yt-dlp reads about the video at `url` without fetching it (its title, length and versions), for the quality picker. BlockedBySource when the site turned the request away."""
+    with _slot():
+        import yt_dlp
+        ydl_opts = _options(url, MAX_DOWNLOAD_MB, None, None, None)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(url, download=False)
+            except Exception as exc:
+                found = _blocked(exc, _site_of(url))
+                if found is exc:
+                    raise
+                raise found from exc
+    if info is None or info.get("_type") in ("playlist", "multi_video"):
+        raise TooLarge("That link is not one video this bot can fetch.")
+    return info
+
+def _options(url: str, mb: int, outtmpl, progress_hook, match_filter) -> dict:
     ydl_opts = {
         "outtmpl": outtmpl,
         "format": _format_selector(mb),
@@ -1156,6 +1248,11 @@ def _download(yt_dlp, url: str, mb: int, outtmpl: str, progress_hook, match_filt
         "cachedir": False,
         "merge_output_format": "mp4",
     }
+    for key in ("outtmpl", "match_filter"):
+        if ydl_opts[key] is None:
+            del ydl_opts[key]
+    if progress_hook is None:
+        del ydl_opts["progress_hooks"]
     if YT_PLAYER_CLIENTS:
         ydl_opts["extractor_args"] = {"youtube": {"player_client": YT_PLAYER_CLIENTS}}
     site = _site_of(url)
@@ -1165,6 +1262,12 @@ def _download(yt_dlp, url: str, mb: int, outtmpl: str, progress_hook, match_filt
     proxy = SITE_PROXIES.get(site) or PROXY
     if proxy:
         ydl_opts["proxy"] = proxy
+    return ydl_opts
+
+def _download(yt_dlp, url: str, mb: int, outtmpl: str, progress_hook, match_filter, choice=None) -> str:
+    """Read the video's versions first, choose the best one that fits `mb` (pick_format) or the one picked (pick_choice), then fetch only that one."""
+    ydl_opts = _options(url, mb, outtmpl, progress_hook, match_filter)
+    site = _site_of(url)
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             info = ydl.extract_info(url, download=False)
@@ -1178,7 +1281,10 @@ def _download(yt_dlp, url: str, mb: int, outtmpl: str, progress_hook, match_filt
     too_long = _reject_long(info, incomplete=False)
     if too_long:
         raise TooLarge(f"Not fetched: {too_long} minutes.")
-    chosen = pick_format(info, mb * 1024 * 1024)
+    if choice is not None:
+        chosen = pick_choice(info, choice, mb * 1024 * 1024)
+    else:
+        chosen = pick_format(info, mb * 1024 * 1024)
     if chosen is None and sizes_known(info):
         raise TooLarge(f"Even its smallest version is over this bot's {mb} MB limit.")
     if chosen is not None:
@@ -1186,7 +1292,13 @@ def _download(yt_dlp, url: str, mb: int, outtmpl: str, progress_hook, match_filt
         logger.info("yt-dlp: %s, %ss, format %s for a %d MB budget", site, info.get("duration"), chosen, mb)
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
-            info = ydl.process_ie_result(info, download=True)
+            if site == "youtube":
+                # Read afresh: fetching from the reading above was refused (HTTP 403) for most single-file
+                # versions and some pairs, measured 2026-11-15 with yt-dlp 2026.10.26 -- the file addresses
+                # don't survive being processed a second time. A fresh read costs ~3 s and fetched 6 of 6.
+                info = ydl.extract_info(url, download=True)
+            else:
+                info = ydl.process_ie_result(info, download=True)
         except Exception as exc:
             found = _blocked(exc, site)
             if found is exc:
@@ -1862,6 +1974,10 @@ COBALT_TIMEOUT_S = float(os.environ.get("DBOT_COBALT_TIMEOUT", "240"))
 
 COBALT_STEP_DOWN = (480, 360)
 
+COBALT_AUDIO = "audio"
+
+AUDIO = "audio"  # what was picked, when it was just the sound: the same value as video.AUDIO
+
 _COBALT_MISSING = ("content.video.unavailable", "content.post.unavailable",
                    "content.video.private", "content.post.private",
                    "content.video.age", "content.post.age", "link.invalid",
@@ -1913,7 +2029,10 @@ async def _cobalt_one(host: str, url: str, platform: str, key: str | None,
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Api-Key {key}"
-    body = {"url": url, "videoQuality": quality or COBALT_QUALITY, "filenameStyle": "basic"}
+    if quality == COBALT_AUDIO:
+        body = {"url": url, "downloadMode": "audio", "audioFormat": "mp3", "filenameStyle": "basic"}
+    else:
+        body = {"url": url, "videoQuality": quality or COBALT_QUALITY, "filenameStyle": "basic"}
     resp = await _post(host + "/", json=body, headers=headers, timeout=COBALT_INSTANCE_TIMEOUT_S)
     try:
         data = resp.json()
@@ -1928,7 +2047,11 @@ async def _cobalt_one(host: str, url: str, platform: str, key: str | None,
     items = _cobalt_items(data, platform)
     if not items:
         raise ProviderFailed(f"{urlparse(host).netloc}: nothing usable ({data.get('status')})", "error")
-    if any(i.kind == "video" for i in items) and platform == "youtube":
+    if quality == COBALT_AUDIO:
+        items = [i for i in items if i.kind == "audio"]
+        if not items:
+            raise ProviderFailed(f"{urlparse(host).netloc}: no sound in its answer", "error")
+    elif any(i.kind == "video" for i in items) and platform == "youtube":
         items = [i for i in items if i.kind == "video"]
     return Resolved(platform, "cobalt", items)
 
@@ -1978,7 +2101,7 @@ async def _cobalt_take(resolved: Resolved, netloc: str) -> None:
     taken: list[str] = []
     try:
         for item in resolved.items:
-            ext = _ext_of(item.filename, "mp4" if item.kind == "video" else "jpg")
+            ext = _ext_of(item.filename, {"video": "mp4", "audio": "mp3"}.get(item.kind, "jpg"))
             taken.append(await _take(item.url, ext, _limit_bytes()))
             size = os.path.getsize(taken[-1])
             if size < MIN_MEDIA_BYTES or (item.kind == "video" and not _looks_like_video(taken[-1])):
@@ -1992,7 +2115,10 @@ async def _cobalt_take(resolved: Resolved, netloc: str) -> None:
         item.path = path
 
 def _cobalt_qualities() -> "list[str]":
-    """The qualities to ask one instance for, in turn: COBALT_QUALITY, then the lower ones of COBALT_STEP_DOWN."""
+    """The qualities to ask one instance for, in turn: COBALT_QUALITY, then the lower ones of COBALT_STEP_DOWN; just the one picked, when something was (no stepping down from a pick)."""
+    choice = _CHOICE.get()
+    if choice is not None:
+        return [COBALT_AUDIO if choice == AUDIO else str(choice)]
     first = COBALT_QUALITY
     top = int(first) if first.isdigit() else 2160
     return [first] + [str(height) for height in COBALT_STEP_DOWN if height < top]
@@ -2135,6 +2261,16 @@ def _invidious_height(fmt: dict) -> int:
     label = re.match(r"(\d+)p", str(fmt.get("resolution") or fmt.get("qualityLabel") or ""))
     return int(label.group(1)) if label else 0
 
+def _invidious_quality(fmt: dict) -> int:
+    """A version's quality as people name it (video.quality_of): its label ("480p"), else the shorter side ("720x1280" is 720p)."""
+    label = re.match(r"(\d{3,4})p", str(fmt.get("qualityLabel") or fmt.get("resolution") or ""))
+    if label:
+        return int(label.group(1))
+    size = re.fullmatch(r"(\d+)x(\d+)", str(fmt.get("size") or ""))
+    if size:
+        return min(int(size.group(1)), int(size.group(2)))
+    return _invidious_height(fmt)
+
 def _invidious_track(fmt: dict) -> int:
     """How much a sound track is the video's own: 2 the original, 1 the only one (nothing said), 0 a dubbed or described one."""
     tags = (parse_qs(urlsplit(str(fmt.get("url") or "")).query).get("xtags") or [""])[0]
@@ -2143,7 +2279,7 @@ def _invidious_track(fmt: dict) -> int:
     return 2 if "acont=original" in tags else 0
 
 def _invidious_pick(formats, budget_bytes: int, height: "int | None" = None, exact: bool = False,
-                    max_height: int = 1080) -> "tuple[dict, dict]":
+                    max_height: int = 1080, quality: "int | None" = None) -> "tuple[dict, dict]":
     """(picture, sound) for the best version that fits `budget_bytes`: H.264 with AAC, which every Telegram app plays and which go into one MP4 as they are; the tallest picture up to `max_height` (or `height`; with `exact`, that height and no other)."""
     formats = [fmt for fmt in formats or () if isinstance(fmt, dict) and fmt.get("url")]
     sounds = [fmt for fmt in formats
@@ -2155,7 +2291,8 @@ def _invidious_pick(formats, budget_bytes: int, height: "int | None" = None, exa
     pictures = [fmt for fmt in formats
                 if str(fmt.get("type") or "").startswith("video/mp4") and "avc1" in str(fmt.get("type"))
                 and _number(fmt.get("clen")) and _invidious_height(fmt)
-                and (_invidious_height(fmt) == height if exact and height is not None
+                and (_invidious_quality(fmt) == quality if quality is not None
+                     else _invidious_height(fmt) == height if exact and height is not None
                      else _invidious_height(fmt) <= cap)]
     if not pictures:
         raise ProviderFailed("no H.264 picture of that height is listed", "error")
@@ -2263,7 +2400,11 @@ async def _invidious_one(host: str, video_id: str, platform: str) -> Resolved:
     if seconds > video.MAX_DURATION_S:
         raise ProviderFailed(f"that clip is {seconds // 60} minutes long, and this bot caps downloads "
                              f"at {video.MAX_DURATION_S // 60}", "too_big")
-    picture, sound = _invidious_pick(data.get("adaptiveFormats"), _limit_bytes(), max_height=video.MAX_HEIGHT)
+    choice = _CHOICE.get()
+    if choice == AUDIO:
+        return await _invidious_sound(host, data, platform)
+    picture, sound = _invidious_pick(data.get("adaptiveFormats"), _limit_bytes(), max_height=video.MAX_HEIGHT,
+                                     quality=choice)
     picture_url, sound_url = _invidious_local(host, picture["url"]), _invidious_local(host, sound["url"])
     if _LOOKUP.get():
         return Resolved(platform, "invidious", [MediaItem("video", url=picture_url, filename=f"{platform}.mp4")])
@@ -2272,6 +2413,30 @@ async def _invidious_one(host: str, video_id: str, platform: str) -> Resolved:
     path = await _invidious_fetch(netloc, picture_url, sound_url,
                                   _number(picture.get("clen")), _number(sound.get("clen")))
     return Resolved(platform, "invidious", [MediaItem("video", path=path, filename=f"{platform}.mp4")])
+
+def _invidious_sound_format(formats) -> dict:
+    """The sound to give somebody who picked just the sound: the video's own AAC track (see _invidious_pick)."""
+    sounds = [fmt for fmt in formats or () if isinstance(fmt, dict) and fmt.get("url")
+              and str(fmt.get("type") or "").startswith("audio/mp4") and _number(fmt.get("clen"))]
+    if not sounds:
+        raise ProviderFailed("no AAC sound is listed", "error")
+    return max(sounds, key=lambda fmt: (_invidious_track(fmt), min(_number(fmt.get("bitrate")), 192_000)))
+
+async def _invidious_sound(host: str, data: dict, platform: str) -> Resolved:
+    netloc = urlparse(host).netloc
+    sound = _invidious_sound_format(data.get("adaptiveFormats"))
+    expected = _number(sound.get("clen"))
+    if expected > _limit_bytes() * INVIDIOUS_SIZE_MARGIN:
+        raise ProviderFailed("the sound alone is over the size limit", "too_big")
+    sound_url = _invidious_local(host, sound["url"])
+    if _LOOKUP.get():
+        return Resolved(platform, "invidious", [MediaItem("audio", url=sound_url, filename=f"{platform}.m4a")])
+    path = await _take(sound_url, "m4a", _limit_bytes())
+    size = os.path.getsize(path)
+    if size < MIN_MEDIA_BYTES or size < expected or not _looks_like_video(path):
+        _unlink(path)
+        raise ProviderFailed(f"{netloc}: sent {size:,} of the sound's {expected:,} bytes", "blocked")
+    return Resolved(platform, "invidious", [MediaItem("audio", path=path, filename=f"{platform}.m4a")])
 
 def _invidious_provider(platform: str):
     async def provider(url: str) -> Resolved:
@@ -2310,7 +2475,8 @@ def _ytdlp_provider(platform: str):
 
         stop = threading.Event()
         try:
-            path = await asyncio.to_thread(video.download_video, url, _WORK_DIR, _LIMIT_MB.get(), stop)
+            path = await asyncio.to_thread(video.download_video, url, _WORK_DIR, _LIMIT_MB.get(), stop,
+                                           _CHOICE.get())
         except asyncio.CancelledError:
             stop.set()
             raise
@@ -2320,8 +2486,9 @@ def _ytdlp_provider(platform: str):
             raise ProviderFailed(str(exc), "too_big") from exc
         except Exception as exc:
             raise ProviderFailed(str(exc), "error") from exc
+        kind = "audio" if _CHOICE.get() == AUDIO else "video"
         return Resolved(platform, "ytdlp",
-                        [MediaItem("video", path=path,
+                        [MediaItem(kind, path=path,
                                    filename=os.path.basename(path))])
     return provider
 
@@ -2374,6 +2541,10 @@ _LIMIT_MB: contextvars.ContextVar = contextvars.ContextVar("download_limit_mb", 
 
 _LOOKUP: contextvars.ContextVar = contextvars.ContextVar("lookup_only", default=False)
 
+# What was picked in the quality picker (AUDIO or a quality), None for the default version. Only the
+# routes of PICK_PLATFORMS read it; the others have one version to give.
+_CHOICE: contextvars.ContextVar = contextvars.ContextVar("download_choice", default=None)
+
 def _timeout_for(name: str) -> float:
     """How long the route called `name` gets before the chain moves on: PROVIDER_TIMEOUT_S, except for the routes that fetch the file while they resolve it."""
     if name.startswith("ytdlp:"):
@@ -2390,13 +2561,130 @@ def _timeout_for(name: str) -> float:
     over_mb = max(0, (_LIMIT_MB.get() or free_mb) - free_mb)
     return max(PROVIDER_TIMEOUT_S, base + over_mb * YTDLP_SECONDS_PER_MB)
 
-async def resolve(platform: str, url: str, max_mb: int | None = None) -> Resolved:
-    """Walk the chain until something produces media, with `max_mb` as the ceiling for anything downloaded on the way."""
+async def resolve(platform: str, url: str, max_mb: int | None = None, choice=None) -> Resolved:
+    """Walk the chain until something produces media, with `max_mb` as the ceiling for anything downloaded on the way, and `choice` the version picked (None: the default one)."""
     token = _LIMIT_MB.set(max_mb)
+    picked = _CHOICE.set(choice)
     try:
         return await _resolve(platform, url)
     finally:
+        _CHOICE.reset(picked)
         _LIMIT_MB.reset(token)
+
+# ---------------------------------------------------------------------------
+# The quality picker's list
+# ---------------------------------------------------------------------------
+# For the sites below, a link pasted in a private chat first gets a card -- the picture, the title, a
+# button per quality and one for the sound -- when one of the routes can say which versions there are and
+# how big each is (yt-dlp's reading, or an Invidious instance's). When none can in PICK_LIST_TIMEOUT_S,
+# the link is downloaded the default way, as before: the card is never the reason a download fails.
+PICK_PLATFORMS = ("youtube",)
+PICK_LIST_TIMEOUT_S = float(os.environ.get("DBOT_PICK_LIST_TIMEOUT", "15"))
+PICK_INVIDIOUS_HOSTS = 2
+
+@dataclass
+class Choices:
+    title: "str | None"
+    duration: "int | None"
+    thumbnail: "str | None"
+    qualities: "list[tuple[int, int]]"
+    audio: "int | None"
+
+    @property
+    def worth_asking(self) -> bool:
+        """At least two things to choose between."""
+        return len(self.qualities) + (1 if self.audio else 0) >= 2
+
+    def offers(self, choice) -> bool:
+        if choice == AUDIO:
+            return bool(self.audio)
+        return any(quality == choice for quality, _ in self.qualities)
+
+def _thumbnail_for(video_id: "str | None") -> "str | None":
+    return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else None
+
+async def _choices_ytdlp(url: str) -> Choices:
+    import video
+    info = await asyncio.to_thread(video.read_info, url)
+    if info.get("is_live"):
+        raise ProviderFailed("a live stream", "missing")
+    if (info.get("duration") or 0) > video.MAX_DURATION_S:
+        raise ProviderFailed("over the length limit", "too_big")  # the default path says so, as before
+    found = video.choices_of(info, _limit_bytes())
+    duration = info.get("duration")
+    return Choices(info.get("title"), int(duration) if isinstance(duration, (int, float)) else None,
+                   info.get("thumbnail") or _thumbnail_for(info.get("id")), found["qualities"], found["audio"])
+
+def _invidious_choices(data: dict, video_id: str) -> Choices:
+    import video
+    formats = [fmt for fmt in data.get("adaptiveFormats") or () if isinstance(fmt, dict) and fmt.get("url")]
+    room = _limit_bytes() * INVIDIOUS_SIZE_MARGIN
+    try:
+        sound = _invidious_sound_format(formats)
+    except ProviderFailed:
+        sound = None
+    sound_bytes = _number(sound.get("clen")) if sound else 0
+    qualities = []
+    found = sorted({_invidious_quality(fmt) for fmt in formats
+                    if str(fmt.get("type") or "").startswith("video/mp4") and "avc1" in str(fmt.get("type"))
+                    and _number(fmt.get("clen"))})
+    for quality in found:
+        if not video.PICK_MIN_QUALITY <= quality <= video.MAX_HEIGHT or not sound:
+            continue
+        try:
+            picture, _ = _invidious_pick(formats, _limit_bytes(), quality=quality)
+        except ProviderFailed:
+            continue
+        qualities.append((quality, _number(picture.get("clen")) + sound_bytes))
+    seconds = _number(data.get("lengthSeconds"))
+    return Choices(data.get("title"), seconds or None, _thumbnail_for(video_id),
+                   qualities[-video.PICK_MAX_QUALITIES:], sound_bytes if sound and sound_bytes <= room else None)
+
+async def _choices_invidious(url: str) -> Choices:
+    import video
+    found = _YT_ID_RE.search(url)
+    if not found:
+        raise ProviderFailed("no video id in that link", "missing")
+    for host in (await _invidious_hosts())[:PICK_INVIDIOUS_HOSTS]:
+        try:
+            resp = await _get(f"{host}/api/v1/videos/{found.group(1)}", params={"local": "true"},
+                              timeout=INVIDIOUS_INSTANCE_TIMEOUT_S)
+            data = resp.json()
+        except Exception as exc:
+            logger.info("picker: %s did not list the versions (%s)", urlparse(host).netloc, type(exc).__name__)
+            continue
+        if resp.status_code != 200 or not isinstance(data, dict) or data.get("error") \
+                or data.get("liveNow") or data.get("isUpcoming"):
+            continue
+        if _number(data.get("lengthSeconds")) > video.MAX_DURATION_S:
+            raise ProviderFailed("over the length limit", "too_big")
+        return _invidious_choices(data, found.group(1))
+    raise ProviderFailed("no Invidious instance listed the versions", "error")
+
+async def _list_choices(url: str) -> "Choices | None":
+    for name, fn in (("ytdlp", _choices_ytdlp), ("invidious", _choices_invidious)):
+        try:
+            found = await fn(url)
+        except Exception as exc:
+            logger.info("picker: %s could not list the versions (%s: %s)", name, type(exc).__name__,
+                        str(exc)[:150])
+            continue
+        if found.worth_asking:
+            return found
+        logger.info("picker: %s listed nothing worth a choice", name)
+    return None
+
+async def choices(platform: str, url: str) -> "Choices | None":
+    """The versions the picker can offer for `url`, or None: the site has no picker, nothing listed them in time, or there is nothing to choose between. Never raises."""
+    if platform not in PICK_PLATFORMS:
+        return None
+    try:
+        return await asyncio.wait_for(_list_choices(url), timeout=PICK_LIST_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        logger.info("picker: nothing listed the versions in %.0fs", PICK_LIST_TIMEOUT_S)
+    except Exception:
+        logger.warning("picker: listing the versions failed", exc_info=True)
+    return None
 
 MAX_ITEMS_PER_POST = max(1, int(os.environ.get("DBOT_MAX_ITEMS_PER_POST", "40")))
 
