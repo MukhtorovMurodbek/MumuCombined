@@ -140,8 +140,9 @@ large files there, and nothing kept about the group.
 
 For a video whose versions can be listed, a private chat first gets a card: its picture and title, a
 button per quality (with its size; only those under the size limit) and one for just the sound. Nothing is
-downloaded or counted until a button is tapped. When the versions can't be listed in 15 seconds
-(`DBOT_PICK_LIST_TIMEOUT`), the link is downloaded the usual way at once. Groups never get the card.
+downloaded or counted until a button is tapped. When the versions can't be listed in 10 seconds
+(`DBOT_PICK_LIST_TIMEOUT`), or the routes that list them are resting after failures, the link is downloaded
+the usual way at once. Groups never get the card.
 
 | platform | returns |
 |---|---|

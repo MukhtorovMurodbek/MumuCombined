@@ -5702,10 +5702,12 @@ async def pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     refusal = await refuse_new_work(lang, user_id, chat_id)
     if refusal:
-        await query.answer(refusal, show_alert=True)
+        await query.answer()
+        await query.message.reply_text(refusal)
         return
     if _user_pending.get(user_id, 0) >= MAX_PENDING_PER_USER:
-        await query.answer(i18n.t(lang, "download_queue_full", count=MAX_PENDING_PER_USER), show_alert=True)
+        await query.answer()
+        await query.message.reply_text(i18n.t(lang, "download_queue_full", count=MAX_PENDING_PER_USER))
         return
     allowance = await asyncio.to_thread(download_allowance, user_id)
     if not allowance["allowed"]:

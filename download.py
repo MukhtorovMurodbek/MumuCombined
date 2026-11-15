@@ -2578,8 +2578,10 @@ async def resolve(platform: str, url: str, max_mb: int | None = None, choice=Non
 # button per quality and one for the sound -- when one of the routes can say which versions there are and
 # how big each is (yt-dlp's reading, or an Invidious instance's). When none can in PICK_LIST_TIMEOUT_S,
 # the link is downloaded the default way, as before: the card is never the reason a download fails.
+# A lister whose download route is resting after failures (Health.cooling_until) is not asked: from a
+# server address yt-dlp is refused, and waiting on it for every link would only delay the download.
 PICK_PLATFORMS = ("youtube",)
-PICK_LIST_TIMEOUT_S = float(os.environ.get("DBOT_PICK_LIST_TIMEOUT", "15"))
+PICK_LIST_TIMEOUT_S = float(os.environ.get("DBOT_PICK_LIST_TIMEOUT", "10"))
 PICK_INVIDIOUS_HOSTS = 2
 
 @dataclass
@@ -2661,8 +2663,15 @@ async def _choices_invidious(url: str) -> Choices:
         return _invidious_choices(data, found.group(1))
     raise ProviderFailed("no Invidious instance listed the versions", "error")
 
+_PICK_LISTERS = (("ytdlp:youtube", "_choices_ytdlp"), ("invidious:youtube", "_choices_invidious"))
+
 async def _list_choices(url: str) -> "Choices | None":
-    for name, fn in (("ytdlp", _choices_ytdlp), ("invidious", _choices_invidious)):
+    now = time.time()
+    for name, fn_name in _PICK_LISTERS:
+        if health(name).cooling_until > now:
+            logger.info("picker: %s is resting, not asked", name)
+            continue
+        fn = globals()[fn_name]
         try:
             found = await fn(url)
         except Exception as exc:
