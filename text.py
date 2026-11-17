@@ -1273,10 +1273,10 @@ STRINGS = {
         "balance_recent": "Recent:",
         "balance_empty_hint": '/recharge adds credit whenever you want some.',
         "bot_short_description": (
-            "Converts pictures, raw photos, video, audio, documents, presentations, spreadsheets, subtitles and archives "
+            "Converts pictures, raw photos, video, audio, documents, slides, spreadsheets, subtitles, archives "
             "— about 100 formats."
         ),
-        "bot_description": 'Send a file and pick what to turn it into. Pictures, raw, video, audio, documents, slides, spreadsheets, subtitles, archives — about 100 formats in, 60 out.\n\nA HEIC from an iPhone becomes a JPG. Several pictures become one PDF. A PDF becomes pictures or text. /formats has the rest.\n\nAnything under 3 MB is free. Above that it is priced by size in ⚡ credit, bought with Stars and shown before you choose. A conversion the bot fails gives its credit back.\n\nEnglish, Uzbek and Russian. /privacy says what it keeps about you.',
+        "bot_description": 'Send a file and pick what to turn it into. Pictures, raw, video, audio, documents, slides, spreadsheets, subtitles, archives — about 100 formats in, 60 out.\n\nAn iPhone HEIC becomes a JPG. Several pictures become one PDF. A PDF becomes pictures or text. /formats has the rest.\n\nAnything under 3 MB is free. Above that it is priced by size in ⚡ credit, bought with Stars and shown before you choose. If the bot fails, the credit comes back.\n\nEnglish, Uzbek and Russian. /privacy says what it keeps about you.',
 
         "privacy_heading": "🔒 Privacy",
         "privacy_kept_heading": "What this bot keeps:",
@@ -2038,7 +2038,7 @@ STRINGS = {
             "Конвертирует картинки, raw-фото, видео, аудио, документы, презентации, таблицы, субтитры и архивы "
             "— около 100 форматов."
         ),
-        "bot_description": 'Пришлите файл и выберите, во что его превратить. Картинки, raw-фото, видео, аудио, документы, презентации, таблицы, субтитры и архивы — около 100 форматов на вход, 60 на выход.\n\nHEIC с iPhone становится JPG. Набор картинок — одним PDF. PDF — картинками или текстом. Весь список — /formats\n\nВсё меньше 3 МБ — бесплатно. Дороже — цена по размеру файла в ⚡ кредите, купленном за Stars, и видна до выбора. Если конвертация сорвётся по вине бота, кредит вернётся.\n\nАнглийский, узбекский и русский. /privacy — что бот о вас хранит.',
+        "bot_description": 'Пришлите файл и выберите, во что его превратить. Картинки, raw-фото, видео, аудио, документы, презентации, таблицы, субтитры и архивы — около 100 форматов на вход, 60 на выход.\n\nHEIC с iPhone становится JPG. Набор картинок — одним PDF. PDF — картинками или текстом. Весь список — /formats\n\nВсё меньше 3 МБ — бесплатно. Дороже — цена по размеру файла в ⚡ кредите, купленном за Stars, и видна до выбора. Сбой по вине бота — кредит вернётся.\n\nАнглийский, узбекский и русский. /privacy — что бот о вас хранит.',
 
         "privacy_heading": "🔒 Конфиденциальность",
         "privacy_kept_heading": "Что бот хранит:",
