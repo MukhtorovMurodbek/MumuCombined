@@ -1,4 +1,4 @@
-# MumuBots
+# MumuCombined
 
 Five Telegram bots, in one process by default (`BOTS=convert` or `python main.py manager`
 runs any subset, so the same code can also run as separate services).

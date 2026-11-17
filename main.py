@@ -72,7 +72,7 @@ PER_BOT_ONLY_PREFIXES = ("PAYMENT_PROVIDER_TOKEN_",)
 NOT_OVERRIDES = {"TOKEN", "USERNAME", "ADMIN_ID"}
 
 POLICY_DOCUMENTS = {"PRIVACY_URL": "privacy", "TERMS_URL": "terms"}
-LEGAL_URL = "https://github.com/MukhtorovMurodbek/MumuBots/blob/main/LEGAL.md"
+LEGAL_URL = "https://github.com/MukhtorovMurodbek/MumuCombined/blob/main/LEGAL.md"
 
 BOTS = (
     ("sticker_bot", "StickerBot", "SBOT"),

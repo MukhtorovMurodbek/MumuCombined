@@ -8,7 +8,7 @@
 # permissions, nothing is deployed from here. Railway builds from `main`
 # on its own; this does not gate it.
 #
-# Written 2026-10-07 for MumuCombined; runs on MumuBots since 2.1.7.
+# Written 2026-10-07 for MumuCombined.
 name: check
 
 on:
