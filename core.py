@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 FAMILY_SCHEMA = "family"
 
-VERSION = os.environ.get("FAMILY_VERSION", "2.1.7")
+VERSION = os.environ.get("FAMILY_VERSION", "2.2.0")
 
 _REPORTS_BECAME_AUTOMATIC = datetime(2026, 9, 13, tzinfo=timezone.utc)
 
@@ -1700,11 +1700,11 @@ _PLAIN = {
     "gift_granted": "\U0001f381 We have passed 100 users, thank you! You get {amount} ⚡ of free credit, "
                     "good until {date}. It pays for about {conversions} paid conversions in {convert} "
                     "or big-file downloads in {download}. Your balance: /balance",
-    "gift_claimed": "\U0001f381 Gift received: {amount} ⚡ of free credit! Mumu bots have passed {users} users, "
-                    "and this is our thank-you.\nIt is good until {date} (UTC) and pays for about {conversions} "
-                    "paid conversions in {convert} or big-file downloads in {download}.\nYour balance: /balance",
-    "gift_ad": "\U0001f389 Mumu bots have passed {users} unique users, so we decided to give out {amount} ⚡ of "
-               "free credit! You can claim it and use it in {download} and {convert}.\n\n<i>To claim it, send any "
+    "gift_claimed": "\U0001f381 Gift: {amount} ⚡ of free credit — Mumu bots passed {users} users, thanks!\n"
+                    "Good until {date} (UTC): about {conversions} paid conversions in {convert} or big "
+                    "downloads in {download}.\n/balance",
+    "gift_ad": "\U0001f389 Mumu bots have passed {users} unique users, so {amount} ⚡ of free credit is being "
+               "given out! It can be claimed and used in {download} and {convert}.\n\n<i>To claim it, send any "
                "message to either bot: the gift is added automatically. Claim it by {claim_by}; once claimed, "
                "it lasts {days} days.</i>",
 }
@@ -1931,7 +1931,7 @@ async def _cmd_gift(context, args):
     return out, None, None
 
 PROMO_KEY = "gift-220-users"
-PROMO_USERS = 220
+PROMO_USERS = 200
 PROMO_CREDITS = 220
 PROMO_CLAIM_DAYS = 14
 PROMO_SPEND_DAYS = 28
