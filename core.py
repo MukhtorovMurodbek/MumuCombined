@@ -1567,6 +1567,19 @@ async def _cmd_whois(context, args):
         lines.append("(They may have never messaged this bot, or blocked it.)")
     return "\n".join(lines), None, None
 
+async def _cmd_tellcredit(context, args):
+    """Tells one person, as this bot and in their language, that the operator changed their ⚡ balance: "told", or why not. ManagerBot asks the bots one by one until one can reach them."""
+    if len(args) != 3 or not all(arg.lstrip("-").isdigit() for arg in args):
+        return "Usage: tellcredit <user_id> <before> <after>", None, None
+    user_id, before, after = (int(arg) for arg in args)
+    lang = await asyncio.to_thread(_language_of, user_id)
+    try:
+        await context.bot.send_message(chat_id=user_id,
+                                       text=phrase("credit_updated", lang, before=before, after=after))
+    except Exception as exc:
+        return f"not reached ({type(exc).__name__}: {exc})", None, None
+    return "told", None, None
+
 async def _cmd_message(context, args):
     """Sends as THIS bot -- that is the whole point of routing it here rather than having ManagerBot send it: the user only ever sees the bot they actually talked to."""
     if len(args) < 2 or not args[0].lstrip("-").isdigit():
@@ -1700,6 +1713,7 @@ _PLAIN = {
     "gift_granted": "\U0001f381 We have passed 100 users, thank you! You get {amount} ⚡ of free credit, "
                     "good until {date}. It pays for about {conversions} paid conversions in {convert} "
                     "or big-file downloads in {download}. Your balance: /balance",
+    "credit_updated": "\U0001f381 The balance has been updated from {before} ⚡ to {after} ⚡!",
     "gift_claimed": "\U0001f381 Gift: {amount} ⚡ of free credit — Mumu bots passed {users} users, thanks!\n"
                     "Good until {date} (UTC): about {conversions} paid conversions in {convert} or big "
                     "downloads in {download}.\n/balance",
@@ -2163,6 +2177,7 @@ COMMANDS = {
     "warnbusy": _cmd_warnbusy,
     "resume": _cmd_resume,
     "gift": _cmd_gift,
+    "tellcredit": _cmd_tellcredit,
 }
 
 COMMAND_HELP = {
@@ -2184,6 +2199,7 @@ COMMAND_HELP = {
     "warnbusy": "tell whoever is mid-something that it is about to be reset",
     "resume": "reopen, and tell everyone who was turned away",
     "gift": "gift <key> <credits> <last day YYYY-MM-DD> [--go] -- bonus credit for everyone, once each; counts unless --go",
+    "tellcredit": "tellcredit <user_id> <before> <after> -- tell one person, as that bot, that the balance changed",
 }
 
 async def _active_users_since(since) -> int:
@@ -7435,11 +7451,13 @@ async def download(chat_id: int, message_id: int, dest, expected_size: int = 0,
                           "limit_s": transfer_limit_s(expected_size)}, progress)
     return int(outcome.get("bytes") or 0)
 
-async def send_document(chat_id: int, path, filename: str, caption: str = "", progress=None) -> None:
-    """Send `path` to the private chat `chat_id` as a document called `filename`, with a plain-text caption."""
+async def send_document(chat_id: int, path, filename: str, caption: str = "", progress=None,
+                        html: bool = False) -> None:
+    """Send `path` to the private chat `chat_id` as a document called `filename`, with a caption: plain text, or HTML with `html`."""
     if not usable(chat_id):
         raise Unavailable("big files are only sent in private chats")
     await _run({"op": "send", "chat_id": chat_id, "path": str(path), "filename": filename, "caption": caption,
+                "parse_mode": "html" if html else None,
                 "limit_s": transfer_limit_s(Path(path).stat().st_size)}, progress)
 
 async def close() -> None:
@@ -7590,7 +7608,7 @@ async def _child_send(client, job: dict, progress) -> None:
                                         file_name=job["filename"], progress_callback=progress)
     await client.send_file(
         types.PeerUser(job["chat_id"]), file=uploaded, caption=job.get("caption") or None,
-        force_document=True, parse_mode=None,
+        force_document=True, parse_mode=job.get("parse_mode"),
         attributes=[types.DocumentAttributeFilename(job["filename"])])
 
 async def _child(job: dict) -> None:

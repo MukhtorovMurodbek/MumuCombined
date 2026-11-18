@@ -793,7 +793,7 @@ from dataclasses import dataclass
 
 MAX_DOWNLOAD_MB = int(os.environ.get("DBOT_MAX_DOWNLOAD_MB", "48"))
 
-MAX_DURATION_S = int(os.environ.get("DBOT_MAX_DURATION_SECONDS", "1800"))
+MAX_DURATION_S = int(os.environ.get("DBOT_MAX_DURATION_SECONDS", "10800"))
 
 MAX_HEIGHT = int(os.environ.get("DBOT_MAX_HEIGHT") or 1080)
 FRAGMENTS_AT_ONCE = max(1, int(os.environ.get("DBOT_YTDLP_FRAGMENTS") or 4))
@@ -2683,16 +2683,19 @@ async def _list_choices(url: str) -> "Choices | None":
         logger.info("picker: %s listed nothing worth a choice", name)
     return None
 
-async def choices(platform: str, url: str) -> "Choices | None":
-    """The versions the picker can offer for `url`, or None: the site has no picker, nothing listed them in time, or there is nothing to choose between. Never raises."""
+async def choices(platform: str, url: str, max_mb: "int | None" = None) -> "Choices | None":
+    """The versions the picker can offer for `url`, or None: the site has no picker, nothing listed them in time, or there is nothing to choose between. Never raises. `max_mb` is the largest version worth listing (the large-file ceiling where large files are set up; the free ceiling otherwise)."""
     if platform not in PICK_PLATFORMS:
         return None
+    token = _LIMIT_MB.set(max_mb)
     try:
         return await asyncio.wait_for(_list_choices(url), timeout=PICK_LIST_TIMEOUT_S)
     except asyncio.TimeoutError:
         logger.info("picker: nothing listed the versions in %.0fs", PICK_LIST_TIMEOUT_S)
     except Exception:
         logger.warning("picker: listing the versions failed", exc_info=True)
+    finally:
+        _LIMIT_MB.reset(token)
     return None
 
 MAX_ITEMS_PER_POST = max(1, int(os.environ.get("DBOT_MAX_ITEMS_PER_POST", "40")))

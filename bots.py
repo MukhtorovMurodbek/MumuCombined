@@ -3937,6 +3937,7 @@ if __name__ == "__main__":
 import asyncio
 import contextvars
 import hashlib
+import html
 import logging
 import os
 import shutil
@@ -3956,6 +3957,7 @@ from telegram import (
     BotCommand, BotCommandScopeAllGroupChats, InputMediaDocument, InputMediaPhoto, InputMediaVideo,
     LinkPreviewOptions, Update, InlineKeyboardButton, InlineKeyboardMarkup,
 )
+from telegram.constants import ParseMode
 from telegram.error import BadRequest
 
 NO_PREVIEW = {"link_preview_options": LinkPreviewOptions(is_disabled=True)}
@@ -4919,14 +4921,12 @@ async def _merge_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
                 raise _MergeStop("merge_too_big")
 
-            caption = None
-            if await _caption_wanted(user_id):
-                caption = i18n.t(lang, "download_credit_caption", username=BOT_USERNAME)
+            caption = await _media_caption(user_id, lang)
             with open(out_path, "rb") as handle:
 
                 await message.reply_document(
                     handle, filename=merge.output_name(platform, kind),
-                    caption=caption, read_timeout=120, write_timeout=120,
+                    caption=caption, parse_mode=ParseMode.HTML, read_timeout=120, write_timeout=120,
                     disable_content_type_detection=True,
                 )
             await status.delete(context.bot)
@@ -4988,10 +4988,10 @@ async def _reply_image_with_button(update, context, data: bytes, stem: str, lang
     token = _remember_delivery(context, platform, url, lossless)
     return await _reply_image(update, data, stem,
                               reply_markup=_nudge_kb(lang, token, lossless),
-                              lossless=lossless)
+                              lossless=lossless, caption=await _media_caption(update.effective_user.id, lang))
 
 async def _reply_image(update: Update, data: bytes, stem: str, reply_markup=None,
-                       lossless: bool | None = None):
+                       lossless: bool | None = None, caption: "str | None" = None):
     """One image back, compressed as a photo or verbatim as a file -- see lossless_toggle for which and why."""
     if lossless is None:
         lossless = await _lossless_wanted(update.effective_user.id)
@@ -5000,11 +5000,11 @@ async def _reply_image(update: Update, data: bytes, stem: str, reply_markup=None
         return await update.effective_message.reply_document(
             document=BytesIO(data),
             filename=f"{stem}.{_image_extension(data)}",
-            reply_markup=reply_markup,
+            reply_markup=reply_markup, caption=caption, parse_mode=ParseMode.HTML,
             disable_content_type_detection=True,
         )
     return await update.effective_message.reply_photo(
-        BytesIO(data), reply_markup=reply_markup)
+        BytesIO(data), reply_markup=reply_markup, caption=caption, parse_mode=ParseMode.HTML)
 
 @contextmanager
 def _media_source(item, path):
@@ -5033,14 +5033,22 @@ def _file_id_of(sent, kind: str, lossless: bool) -> "str | None":
         return None
     return file_id if isinstance(file_id, str) and file_id else None
 
+COPYRIGHT_URL = (os.environ.get("TERMS_URL") or "").strip()
+
+async def _media_caption(user_id: int, lang: str) -> str:
+    """What goes under every file sent, in HTML: the copyright note (2.2.0), then the credit line for whoever keeps it on."""
+    caption = (i18n.t(lang, "copyright_note", url=html.escape(COPYRIGHT_URL, quote=True)) if COPYRIGHT_URL
+               else i18n.t(lang, "copyright_note_plain"))
+    if await _caption_wanted(user_id):
+        caption += "\n\n" + html.escape(i18n.t(lang, "download_credit_caption", username=BOT_USERNAME))
+    return caption
+
 async def _send_media(update, context, items_with_paths, lang,
                       lossless: bool | None = None, redeliver_token: str | None = None,
                       probing: "video.ProbeRun | None" = None,
                       title: "str | None" = None, duration: "int | None" = None) -> "list[tuple[str, str]] | None":
     """Put what was resolved into the chat."""
-    caption = None
-    if await _caption_wanted(update.effective_user.id):
-        caption = i18n.t(lang, "download_credit_caption", username=BOT_USERNAME)
+    caption = await _media_caption(update.effective_user.id, lang)
     if lossless is None:
         lossless = await _lossless_wanted(update.effective_user.id)
     if probing is None:
@@ -5076,26 +5084,26 @@ async def _send_media(update, context, items_with_paths, lang,
             if lossless:
                 sent = await message.reply_document(
                     f, filename=os.path.basename(item.filename or path),
-                    caption=caption, reply_markup=keyboard,
+                    caption=caption, parse_mode=ParseMode.HTML, reply_markup=keyboard,
                     read_timeout=120, write_timeout=120,
                     disable_content_type_detection=True,
                 )
             elif item.kind == "video":
                 sent = await message.reply_video(
-                    f, caption=caption, reply_markup=keyboard,
+                    f, caption=caption, parse_mode=ParseMode.HTML, reply_markup=keyboard,
                     read_timeout=120, write_timeout=120,
                     **shape,
                 )
             elif item.kind == "audio":
                 ext = os.path.splitext(item.filename or path or "")[1] or ".m4a"
                 sent = await message.reply_audio(
-                    f, caption=caption, reply_markup=keyboard, title=(title or None) and title[:64],
+                    f, caption=caption, parse_mode=ParseMode.HTML, reply_markup=keyboard, title=(title or None) and title[:64],
                     filename=_audio_filename(title, ext), duration=duration or None,
                     read_timeout=120, write_timeout=120,
                 )
             else:
                 sent = await message.reply_photo(
-                    f, caption=caption, reply_markup=keyboard,
+                    f, caption=caption, parse_mode=ParseMode.HTML, reply_markup=keyboard,
                     read_timeout=120, write_timeout=120,
                 )
         file_id = _file_id_of(sent, item.kind, lossless)
@@ -5115,11 +5123,11 @@ async def _send_media(update, context, items_with_paths, lang,
                 if lossless:
                     group.append(InputMediaDocument(
                         handle, filename=os.path.basename(item.filename or path),
-                        caption=cap, disable_content_type_detection=True))
+                        caption=cap, parse_mode=ParseMode.HTML, disable_content_type_detection=True))
                 elif item.kind == "video":
-                    group.append(InputMediaVideo(handle, caption=cap, **shapes[n]))
+                    group.append(InputMediaVideo(handle, caption=cap, parse_mode=ParseMode.HTML, **shapes[n]))
                 else:
-                    group.append(InputMediaPhoto(handle, caption=cap))
+                    group.append(InputMediaPhoto(handle, caption=cap, parse_mode=ParseMode.HTML))
             sent_group = await message.reply_media_group(
                 group, read_timeout=120, write_timeout=120)
         finally:
@@ -5242,7 +5250,8 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
                             quiet_if_missing: bool = False,
                             lossless_override: bool | None = None,
                             from_redo: bool = False,
-                            choice=None, title: "str | None" = None, duration: "int | None" = None) -> bool:
+                            choice=None, title: "str | None" = None, duration: "int | None" = None,
+                            paid: bool = False) -> bool:
     """The whole download path: pick a route that is working, fetch, send. `choice` is what was picked in the quality picker (None: the default version); a pick is always fetched afresh, since the kept files and the stored file ids are of the default version."""
     if choice == resolvers.AUDIO:
         lossless_override = False  # a sound file is a sound file
@@ -5310,6 +5319,8 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
             if free is not None and free < MIN_FREE_MB:
                 await status.set(context.bot, i18n.t(lang, "download_short_on_space"))
                 return False
+            if paid and large_files.CONFIGURED:
+                return await _large_download(update, context, status, lang, platform, url, choice=choice)
             try:
                 resolved = await resolvers.resolve(platform, url, choice=choice)
             except resolvers.NothingWorked as exc:
@@ -5317,8 +5328,8 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 if exc.kind == "missing" and quiet_if_missing:
                     return False
 
-                if exc.kind == "too_big" and large_files.CONFIGURED and choice is None:
-                    return await _large_download(update, context, status, lang, platform, url)
+                if exc.kind == "too_big" and large_files.CONFIGURED:
+                    return await _large_download(update, context, status, lang, platform, url, choice=choice)
                 if exc.kind not in ("missing", "too_big"):
                     note_job(False)
                 key = {
@@ -5360,14 +5371,14 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
                         paths.clear()
                     await _store_sent_files(update.effective_user.id, platform, url, delivered_lossless, sent)
             except net.TooLarge as exc:
-                if not large_files.CONFIGURED or choice is not None:
+                if not large_files.CONFIGURED:
                     await status.set(context.bot, str(exc), **NO_PREVIEW)
                     return False
                 for path in paths:
                     if path and os.path.exists(path):
                         os.remove(path)
                 paths.clear()
-                return await _large_download(update, context, status, lang, platform, url)
+                return await _large_download(update, context, status, lang, platform, url, choice=choice)
             except net.FetchError as exc:
                 note_job(False)
                 await status.set(context.bot, str(exc), **NO_PREVIEW)
@@ -5389,7 +5400,7 @@ async def _resolve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
     await _after_send(update, context, lang)
     return True
 
-async def _large_download(update, context, status, lang, platform: str, url: str) -> bool:
+async def _large_download(update, context, status, lang, platform: str, url: str, choice=None) -> bool:
     """A file over the free ceiling (large_files.py): refused with its price and the switch, or -- for somebody who has switched large files on -- fetched, charged once it is here, and sent."""
     chat_id, user_id = update.effective_chat.id, update.effective_user.id
     free, per = large_files.FREE_MAX_MB, large_files.first_price()
@@ -5411,14 +5422,15 @@ async def _large_download(update, context, status, lang, platform: str, url: str
     paths: list[str] = []
     try:
         try:
-            resolved = await resolvers.resolve(platform, url, max_mb=large_files.LARGE_MAX_MB)
+            resolved = await resolvers.resolve(platform, url, max_mb=large_files.LARGE_MAX_MB, choice=choice)
             for item in resolved.items:
                 paths.append(await resolvers.download(item, max_mb=large_files.LARGE_MAX_MB))
         except (resolvers.NothingWorked, net.TooLarge) as exc:
             too_big = isinstance(exc, net.TooLarge) or exc.kind == "too_big"
             if not too_big:
                 note_job(False)
-            await status.set(context.bot, i18n.t(lang, "large_files_too_big", max=large_files.LARGE_MAX_MB)
+            await status.set(context.bot, i18n.t(lang, "large_files_too_big", max=large_files.LARGE_MAX_MB,
+                                                 minutes=video.MAX_DURATION_S // 60)
                              if too_big else i18n.t(lang, "download_all_routes_failed"), **NO_PREVIEW)
             return False
         except net.FetchError as exc:
@@ -5460,14 +5472,12 @@ async def _large_download(update, context, status, lang, platform: str, url: str
 
 async def _send_large(update, context, items_with_paths, lang) -> None:
     """What a large download fetched: anything over the Bot API's 50 MB goes over MTProto as a file, the rest as usual, one by one."""
-    caption = None
-    if await _caption_wanted(update.effective_user.id):
-        caption = i18n.t(lang, "download_credit_caption", username=BOT_USERNAME)
+    caption = await _media_caption(update.effective_user.id, lang)
     probing = video.ProbeRun()
     for item, path in items_with_paths:
         if os.path.getsize(path) > large_files.BOT_API_SEND_BYTES:
             await big_files.send_document(update.effective_chat.id, path,
-                                          os.path.basename(item.filename or path), caption or "")
+                                          os.path.basename(item.filename or path), caption, html=True)
         else:
             await _send_media(update, context, [(item, path)], lang, probing=probing)
 
@@ -5625,6 +5635,7 @@ def _remember_pick(context, platform: str, url: str, found: "resolvers.Choices")
     memory[token] = {"platform": platform, "url": url, "title": (found.title or "")[:200],
                      "duration": found.duration,
                      "qualities": [quality for quality, _ in found.qualities],
+                     "sizes": dict(found.qualities), "audio_size": found.audio,
                      "audio": bool(found.audio), "at": time.time()}
     return token
 
@@ -5632,13 +5643,25 @@ def _size_label(lang: str, size: int) -> str:
     mb = size / (1024 * 1024)
     return i18n.t(lang, "pick_size_mb", mb=f"{mb:.1f}" if mb < 10 else f"{mb:.0f}")
 
+def _pick_free_bytes() -> float:
+    """The most the card marks as free: under the free ceiling with room to spare, since a listed size is an estimate. Without large files everything listed is free."""
+    return large_files.FREE_MAX_MB * large_files.MB * 0.9 if large_files.CONFIGURED else float("inf")
+
+def _pick_is_paid(remembered: dict, choice) -> bool:
+    """Whether a version picked on the card goes the large-file way (switched on in /settings, paid in ⚡)."""
+    size = (remembered.get("audio_size") if choice == resolvers.AUDIO
+            else (remembered.get("sizes") or {}).get(choice))
+    return bool(size) and size > _pick_free_bytes()
+
 def _pick_kb(lang: str, token: str, found: "resolvers.Choices") -> InlineKeyboardMarkup:
-    buttons = [InlineKeyboardButton(f"🎬 {quality}p · {_size_label(lang, size)}",
+    free = _pick_free_bytes()
+    buttons = [InlineKeyboardButton(f"{'🎬' if size <= free else '⚡'} {quality}p · {_size_label(lang, size)}",
                                     callback_data=f"{PICK_PREFIX}{token}:{quality}")
                for quality, size in found.qualities]
     rows = [buttons[n:n + 2] for n in range(0, len(buttons), 2)]
     if found.audio:
-        rows.append([InlineKeyboardButton(f"{i18n.t(lang, 'pick_audio')} · {_size_label(lang, found.audio)}",
+        paid = " ⚡" if found.audio > free else ""
+        rows.append([InlineKeyboardButton(f"{i18n.t(lang, 'pick_audio')} · {_size_label(lang, found.audio)}{paid}",
                                           callback_data=f"{PICK_PREFIX}{token}:{PICK_AUDIO}")])
     return InlineKeyboardMarkup(rows)
 
@@ -5650,13 +5673,17 @@ def _pick_caption(lang: str, found: "resolvers.Choices") -> str:
         minutes, seconds = divmod(int(found.duration), 60)
         hours, minutes = divmod(minutes, 60)
         lines.append("⏱ " + (f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"))
+    free = _pick_free_bytes()
+    if any(size > free for _, size in found.qualities) or (found.audio or 0) > free:
+        lines.append(i18n.t(lang, "pick_paid_note", free=large_files.FREE_MAX_MB))
     lines.append(i18n.t(lang, "pick_prompt"))
     return "\n".join(lines[:-1]) + ("\n\n" if len(lines) > 1 else "") + lines[-1]
 
 async def _offer_choices(update: Update, context: ContextTypes.DEFAULT_TYPE, platform: str, url: str) -> None:
     lang = await i18n.get_lang(update.effective_user.id, context)
     status = await LiveMessage.reply_to(update.effective_message, i18n.t(lang, "fetching"))
-    found = await resolvers.choices(platform, url)
+    found = await resolvers.choices(platform, url,
+                                    max_mb=large_files.LARGE_MAX_MB if large_files.CONFIGURED else None)
     if found is None:
         note_tap("pick.not_listed")
         await asyncio.to_thread(record_download, update.effective_user.id, platform)
@@ -5718,10 +5745,11 @@ async def pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.to_thread(record_download, user_id, platform)
     note_tap("pick.audio" if choice == resolvers.AUDIO else f"pick.{choice}p")
     _in_flight[key] = time.monotonic()
+    paid = _pick_is_paid(remembered, choice)
 
     async def work():
         await _resolve_and_send(update, context, platform, url, choice=choice, title=remembered.get("title"),
-                                duration=remembered.get("duration"))
+                                duration=remembered.get("duration"), paid=paid)
 
     _spawn_download(context, update, work, in_flight=key)
 
@@ -8821,12 +8849,14 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         who = update.effective_user
         detail = f"by admin {who.id}" + (f" (@{who.username})" if who.username else "")
         if kind == "set":
+            before = await asyncio.to_thread(family_link.star_balance, user_id)
             after = await asyncio.to_thread(
                 family_link.set_star_balance, user_id, amount, "adjustment", detail)
             what = f"set to {after} ⚡"
         else:
             after = await asyncio.to_thread(
                 family_link.move_stars, user_id, amount, "adjustment", detail)
+            before = after - amount
             what = f"{'+' if amount > 0 else ''}{amount} ⚡ → {after} ⚡"
 
         await asyncio.to_thread(
@@ -8834,6 +8864,8 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Balance of {user_id} {what} by admin {who.id}")
         await update.message.reply_text(
             f"⚡ <code>{user_id}</code>: {what}", parse_mode=ParseMode.HTML)
+        if after > before:
+            await _tell_credit(update, user_id, before, after)
 
     totals = await asyncio.to_thread(family_link.star_totals, user_id)
     rows = await asyncio.to_thread(family_link.star_ledger_for, user_id, BALANCE_HISTORY_ROWS)
@@ -8876,6 +8908,49 @@ async def addcredit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"⚡ +{amount} added to <code>{user_id}</code>. Balance now {after} ⚡.",
         parse_mode=ParseMode.HTML)
+    await _tell_credit(update, user_id, after - amount, after)
+
+# The person is told when the operator adds credit by hand (2.2.0): by the first public bot, in this
+# order, that can reach them -- a bot can only message somebody who has started it -- in their
+# language ("credit_updated"). Each answer comes back through result_pump, which asks the next bot
+# if this one could not, and says here who told them.
+CREDIT_NOTE_BOTS = ("downloaderbot", "convertbot", "stickerbot", "anonbot")
+_CREDIT_NOTES: "dict[int, dict]" = {}
+
+async def _tell_credit(update: Update, user_id: int, before: int, after: int) -> None:
+    note = {"user_id": user_id, "before": before, "after": after, "left": list(CREDIT_NOTE_BOTS),
+            "chat": update.effective_chat.id, "admin": update.effective_user.id, "tried": []}
+    if not await _queue_credit_note(note):
+        await update.message.reply_text("📨 The person could not be told: no bot took the message.")
+
+async def _queue_credit_note(note: dict) -> bool:
+    while note["left"]:
+        bot_id = note["left"].pop(0)
+        try:
+            command_id = await asyncio.to_thread(
+                db.queue_command, bot_id, "tellcredit", f"{note['user_id']} {note['before']} {note['after']}",
+                note["admin"], note["chat"])
+        except Exception:
+            logger.warning("Could not ask %s to tell %s about the new balance", bot_id, note["user_id"],
+                           exc_info=True)
+            continue
+        _CREDIT_NOTES[command_id] = dict(note, bot=bot_id)
+        return True
+    return False
+
+async def _deliver_credit_note(context, note: dict, result: dict) -> None:
+    name = (resolve_bot(note["bot"]) or {}).get("name", note["bot"])
+    if result["ok"] and (result["output"] or "").startswith("told"):
+        text = f"📨 {note['user_id']} was told through {name}: {note['before']} → {note['after']} ⚡."
+    else:
+        note["tried"].append(f"{name}: {(result['output'] or result['status'])[:100]}")
+        if await _queue_credit_note(note):
+            return
+        text = f"📨 {note['user_id']} could not be told about the new balance. " + "; ".join(note["tried"])
+    try:
+        await context.bot.send_message(chat_id=note["chat"], text=text)
+    except Exception:
+        logger.warning("Could not report the credit note for %s", note["user_id"], exc_info=True)
 
 EVENTS_DEFAULT = 15
 EVENTS_MAX = 60
@@ -9799,6 +9874,11 @@ async def result_pump(context: ContextTypes.DEFAULT_TYPE) -> None:
         group = _FANOUTS.pop(result["id"], None)
         if group is not None:
             await _deliver_fanout(context, group, result)
+            continue
+
+        credit = _CREDIT_NOTES.pop(result["id"], None)
+        if credit is not None:
+            await _deliver_credit_note(context, credit, result)
             continue
 
         chat_id = result["reply_chat_id"]
