@@ -1718,9 +1718,14 @@ _PLAIN = {
                     "Good until {date} (UTC): about {conversions} paid conversions in {convert} or big "
                     "downloads in {download}.\n/balance",
     "gift_ad": "\U0001f389 Mumu bots have passed {users} unique users, so {amount} ⚡ of free credit is being "
-               "given out! It can be claimed and used in {download} and {convert}.\n\n<i>To claim it, send any "
-               "message to either bot: the gift is added automatically. Claim it by {claim_by}; once claimed, "
-               "it lasts {days} days.</i>",
+               "given out! It can be claimed and used in {download} and {convert}.\n\n<i>To claim it, send /gift "
+               "to either bot, or tap the button it shows. Claim it by {claim_by}; once claimed, it lasts {days} "
+               "days.</i>",
+    "gift_offer": "\U0001f381 Mumu bots passed {users} users: {amount} ⚡ of free credit for everyone, once.\n"
+                  "Claim it by {claim_by} (UTC) with the button below or /gift. Once claimed, it lasts {days} days.",
+    "gift_claim_button": "\U0001f381 Claim {amount} ⚡",
+    "gift_already_had": "\U0001f381 This gift has already been claimed: one per person. /balance",
+    "gift_not_open": "\U0001f381 No gift can be claimed right now.",
 }
 
 def phrase(key: str, lang: str | None = None, **kwargs) -> str:
@@ -2101,6 +2106,13 @@ def promo_notice(lang: "str | None", expires_at: datetime) -> str:
         "gift_claimed", lang, amount=PROMO_CREDITS, users=PROMO_USERS,
         date=(expires_at - timedelta(days=1)).strftime("%d.%m.%Y"),
         conversions=max(1, PROMO_CREDITS // GIFT_CREDITS_PER_CONVERSION), **_promo_bots(),
+    )
+
+def promo_offer(lang: "str | None", closes: datetime) -> str:
+    """What ConvertBot and DownloaderBot say to somebody who writes while the gift is open and has not had it: the amount, the last day to claim, how long it lasts, and the button or /gift that claims it. Plain text."""
+    return phrase(
+        "gift_offer", lang, amount=PROMO_CREDITS, users=PROMO_USERS, days=PROMO_SPEND_DAYS,
+        claim_by=(closes - timedelta(microseconds=1)).strftime("%d.%m.%Y"),
     )
 
 def promo_ad(lang: "str | None", closes: datetime) -> str:
@@ -5098,35 +5110,71 @@ def _notice_language(user_id: int, telegram_code: "str | None") -> str:
     code = (telegram_code or "").split("-")[0].lower()
     return code if code in i18n.SUPPORTED_LANGUAGES else "en"
 
-async def _claim_and_tell(context, user_id: int, chat_id: int, telegram_code: "str | None" = None) -> None:
+PROMO_CALLBACK = "promogift"
+
+async def _offer_gift(context, user_id: int, chat_id: int, telegram_code: "str | None" = None) -> None:
+    """Since 2.2.0 the gift is claimed on purpose: the first message while it is open gets this offer -- the amount, the last day to claim, how long it lasts -- with a button; /gift claims it too. Once per person (per process: a restart may offer it once more)."""
     log = logging.getLogger(__name__)
     try:
         window = await asyncio.to_thread(family_link.promo_window)
         now = datetime.now(timezone.utc)
         if window is None or not window[0] <= now < window[1]:
-
             if window is not None and now >= window[1]:
                 _promo_state["over"] = True
             return
-        outcome, expires = await asyncio.to_thread(family_link.claim_promo_gift, user_id)
+        if await asyncio.to_thread(family_link.promo_given_to, user_id):
+            context.user_data[PROMO_DONE_KEY] = family_link.PROMO_KEY
+            return
+        lang = await asyncio.to_thread(_notice_language, user_id, telegram_code)
+        context.user_data[PROMO_DONE_KEY] = family_link.PROMO_KEY
+        button = InlineKeyboardButton(family_link.phrase("gift_claim_button", lang, amount=family_link.PROMO_CREDITS),
+                                      callback_data=PROMO_CALLBACK)
+        await context.bot.send_message(chat_id=chat_id, text=family_link.promo_offer(lang, window[1]),
+                                       reply_markup=InlineKeyboardMarkup([[button]]))
     except Exception as exc:
-
-        log.warning("The gift could not be claimed (%s); the next message tries again", type(exc).__name__)
-        return
+        log.warning("The gift could not be offered (%s); the next message tries again", type(exc).__name__)
+        context.user_data.pop(PROMO_DONE_KEY, None)
     finally:
         _promo_claiming.discard(user_id)
-    context.user_data[PROMO_DONE_KEY] = family_link.PROMO_KEY
-    if outcome != family_link.PROMO_GIVEN:
-        return
-    try:
-        lang = await asyncio.to_thread(_notice_language, user_id, telegram_code)
-        await context.bot.send_message(chat_id=chat_id, text=family_link.promo_notice(lang, expires))
-    except Exception:
 
+async def _claim_and_tell(context, user_id: int, chat_id: int, telegram_code: "str | None" = None) -> None:
+    """A tap on the offer's button, or /gift: the gift, and a notice saying until when it lasts; or why not."""
+    log = logging.getLogger(__name__)
+    try:
+        outcome, expires = await asyncio.to_thread(family_link.claim_promo_gift, user_id)
+    except Exception as exc:
+        log.warning("The gift could not be claimed (%s)", type(exc).__name__)
+        return
+    lang = await asyncio.to_thread(_notice_language, user_id, telegram_code)
+    if outcome == family_link.PROMO_GIVEN:
+        text = family_link.promo_notice(lang, expires)
+    elif outcome == family_link.PROMO_HAD:
+        text = family_link.phrase("gift_already_had", lang)
+    else:
+        text = family_link.phrase("gift_not_open", lang)
+    context.user_data[PROMO_DONE_KEY] = family_link.PROMO_KEY
+    try:
+        await context.bot.send_message(chat_id=chat_id, text=text)
+    except Exception:
         log.debug("The gift's notice could not be sent", exc_info=True)
 
 def attach_promo_claim(app, group: int = -2) -> None:
-    """Register in a group of its OWN (python-telegram-bot runs one handler per group), after the flood gate's: somebody being throttled claims nothing."""
+    """Register in a group of its OWN (python-telegram-bot runs one handler per group), after the flood gate's: somebody being throttled claims nothing. /gift and the offer's button come first in that group and stop there; any other private message may get the offer."""
+    from telegram.ext import CallbackQueryHandler, CommandHandler, filters
+
+    async def _claim_now(update, context) -> None:
+        user, chat = update.effective_user, update.effective_chat
+        if update.callback_query is not None:
+            try:
+                await update.callback_query.answer()
+            except Exception:
+                pass
+        if user is not None and chat is not None and not getattr(user, "is_bot", False):
+            await _claim_and_tell(context, user.id, chat.id, getattr(user, "language_code", None))
+        raise ApplicationHandlerStop
+
+    app.add_handler(CommandHandler("gift", _claim_now, filters=filters.ChatType.PRIVATE), group=group)
+    app.add_handler(CallbackQueryHandler(_claim_now, pattern=f"^{PROMO_CALLBACK}$"), group=group)
 
     async def _claim_on_message(update, context) -> None:
         if _promo_state["over"]:
@@ -5139,7 +5187,7 @@ def attach_promo_claim(app, group: int = -2) -> None:
             return
         _promo_claiming.add(user.id)
         context.application.create_task(
-            _claim_and_tell(context, user.id, chat.id, getattr(user, "language_code", None)))
+            _offer_gift(context, user.id, chat.id, getattr(user, "language_code", None)))
 
     app.add_handler(TypeHandler(Update, _claim_on_message), group=group)
 

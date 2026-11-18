@@ -10629,8 +10629,9 @@ def _promo_card_text(count: int) -> str:
     amount, spend_days = family_link.PROMO_CREDITS, family_link.PROMO_SPEND_DAYS
     return (
         f"Start the {amount} ⚡ gift? This can be done once.\n"
-        f"• Anyone who writes to ConvertBot or DownloaderBot until {claim_by} (the end of that day, UTC) "
-        f"gets {amount} ⚡ of bonus credit, once, automatically, and a notice.\n"
+        f"• ConvertBot and DownloaderBot offer it to everyone who writes to them, with a button; /gift "
+        f"claims it too. It can be claimed until {claim_by} (the end of that day, UTC): {amount} ⚡ of "
+        f"bonus credit, once, and a notice saying until when it lasts.\n"
         f"• Each gift can be spent for {spend_days} days from the day it is claimed.\n"
         f"• AnonBot shows this ad once to each person who writes to it, until then:\n\n"
         f"{family_link.promo_ad('en', closes)}\n\n"
