@@ -14,6 +14,8 @@ import os
 import time
 from collections import OrderedDict, deque
 
+from telegram import (InputMediaAnimation, InputMediaAudio, InputMediaDocument, InputMediaPhoto,
+                      InputMediaVideo)
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 
@@ -136,6 +138,54 @@ def reaction_note_allowed(user_id: int) -> bool:
     _trim(_reaction_notes)
     return True
 
+def compose(header: "str | None", body: "str | None", italic: bool = True) -> str:
+    """Bot's own header upright, the person's own words in italics."""
+    parts = []
+    if header:
+        parts.append(html.escape(header))
+    if body:
+        parts.append(italicize(body) if italic else html.escape(body))
+    return "\n\n".join(parts)
+
+class EditTooLong(ValueError):
+    """The edited message no longer fits in one message, so its twin cannot take it."""
+
+def _edited_media(message, caption: "str | None"):
+    """The edited message's file, as what replaces the twin's, or None for a kind that cannot be swapped."""
+    common = {"caption": caption, "parse_mode": ParseMode.HTML}
+    if message.photo:
+        return InputMediaPhoto(message.photo[-1].file_id, **common)
+    if message.animation is not None:
+        return InputMediaAnimation(message.animation.file_id, **common)
+    if message.video is not None:
+        return InputMediaVideo(message.video.file_id, **common)
+    if message.audio is not None:
+        return InputMediaAudio(message.audio.file_id, **common)
+    if message.document is not None:
+        return InputMediaDocument(message.document.file_id, **common)
+    return None
+
+async def edit_relayed(bot, message, to_chat_id, twin_id, header=None, reply_markup=None, italic=True) -> None:
+    """Carry an edit of `message` onto its one twin in `to_chat_id`, with the same header and buttons it was
+    sent with. Raises EditTooLong when it no longer fits, BadRequest when Telegram refuses."""
+    if message.text is not None:
+        text = compose(header, message.text, italic)
+        if len(text) > TEXT_LIMIT:
+            raise EditTooLong()
+        await bot.edit_message_text(chat_id=to_chat_id, message_id=twin_id, text=text,
+                                    parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+        return
+    caption = compose(header, message.caption, italic) or None
+    if caption is not None and len(caption) > CAPTION_LIMIT:
+        raise EditTooLong()
+    media = _edited_media(message, caption)
+    if media is not None:
+        await bot.edit_message_media(chat_id=to_chat_id, message_id=twin_id, media=media,
+                                     reply_markup=reply_markup)
+        return
+    await bot.edit_message_caption(chat_id=to_chat_id, message_id=twin_id, caption=caption,
+                                   parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+
 async def relay_content(
     bot, message, to_chat_id,
     reply_to_message_id=None, reply_markup=None, header=None, italic=True,
@@ -143,13 +193,7 @@ async def relay_content(
     """Delivers `message`'s content into `to_chat_id`, preserving whatever it is (text, photo, video, voice, sticker, document, ...) with no "Forwarded from" tag -- copy_message handles every content type Telegram lets a bot copy, so there is no need to branch on message.photo / message.video / etc."""
 
     def _compose(body: str | None) -> str:
-        """Bot's own header upright, the person's own words in italics."""
-        parts = []
-        if header:
-            parts.append(html.escape(header))
-        if body:
-            parts.append(italicize(body) if italic else html.escape(body))
-        return "\n\n".join(parts)
+        return compose(header, body, italic)
 
     async def _send_text(text, reply_to, markup):
         try:

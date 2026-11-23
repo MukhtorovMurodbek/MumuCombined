@@ -4000,6 +4000,8 @@ from db import (
     set_lossless_enabled,
     get_large_files_enabled,
     set_large_files_enabled,
+    get_copyright_note_off,
+    set_copyright_note_off,
     get_user_language,
     set_user_language,
     dump_database_csv_zip,
@@ -4246,6 +4248,7 @@ BOT_COMMANDS = [
     BotCommand("start", "What I do, and how to start"),
     BotCommand("language", "Choose your language / Tilni tanlash / Выбрать язык"),
     BotCommand("settings", "Captions and file quality"),
+    BotCommand("disclaimer", "The copyright note under files"),
     BotCommand("cancel", "Stop whatever I am waiting for"),
     BotCommand("help", "Everything I can do"),
     BotCommand("feedback", "Suggest something, or report a problem"),
@@ -4480,6 +4483,11 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + i18n.t(lang, "lossless_status", state=lossless_state))
     rows = (_caption_keyboard(lang, caption_on).inline_keyboard
             + _lossless_keyboard(lang, lossless_on).inline_keyboard)
+
+    note_on = await _note_wanted(update.effective_chat.id)
+    text += "\n\n" + i18n.t(lang, "note_settings_line",
+                             state=i18n.t(lang, "caption_state_on" if note_on else "caption_state_off"))
+    rows += ((InlineKeyboardButton(i18n.t(lang, "note_settings_button"), callback_data=NOTE_PREFIX + "show"),),)
 
     if large_files.CONFIGURED:
         large_on = await asyncio.to_thread(get_large_files_enabled, update.effective_user.id)
@@ -4921,7 +4929,7 @@ async def _merge_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
                 raise _MergeStop("merge_too_big")
 
-            caption = await _media_caption(user_id, lang)
+            caption = await _media_caption(user_id, lang, chat_id)
             with open(out_path, "rb") as handle:
 
                 await message.reply_document(
@@ -4988,7 +4996,7 @@ async def _reply_image_with_button(update, context, data: bytes, stem: str, lang
     token = _remember_delivery(context, platform, url, lossless)
     return await _reply_image(update, data, stem,
                               reply_markup=_nudge_kb(lang, token, lossless),
-                              lossless=lossless, caption=await _media_caption(update.effective_user.id, lang))
+                              lossless=lossless, caption=await _media_caption(update.effective_user.id, lang, update.effective_chat.id))
 
 async def _reply_image(update: Update, data: bytes, stem: str, reply_markup=None,
                        lossless: bool | None = None, caption: "str | None" = None):
@@ -5035,20 +5043,98 @@ def _file_id_of(sent, kind: str, lossless: bool) -> "str | None":
 
 COPYRIGHT_URL = (os.environ.get("TERMS_URL") or "").strip()
 
-async def _media_caption(user_id: int, lang: str) -> str:
-    """What goes under every file sent, in HTML: the copyright note (2.2.0), then the credit line for whoever keeps it on."""
-    caption = (i18n.t(lang, "copyright_note", url=html.escape(COPYRIGHT_URL, quote=True)) if COPYRIGHT_URL
-               else i18n.t(lang, "copyright_note_plain"))
+def _copyright_note(lang: str) -> str:
+    return (i18n.t(lang, "copyright_note", url=html.escape(COPYRIGHT_URL, quote=True)) if COPYRIGHT_URL
+            else i18n.t(lang, "copyright_note_plain"))
+
+async def _note_wanted(chat_id: int) -> bool:
+    """Whether files sent in this chat carry the copyright note: yes unless the chat turned it off
+    with /disclaimer. A database error keeps the note on."""
+    try:
+        return await asyncio.to_thread(get_copyright_note_off, chat_id) is None
+    except Exception:
+        logger.debug("Could not read whether this chat turned the note off", exc_info=True)
+        return True
+
+async def _media_caption(user_id: int, lang: str, chat_id: "int | None" = None) -> "str | None":
+    """What goes under every file sent, in HTML: the copyright note (2.2.0) unless the chat turned it off,
+    then the credit line for whoever keeps it on. None when neither is wanted."""
+    parts = []
+    if await _note_wanted(user_id if chat_id is None else chat_id):
+        parts.append(_copyright_note(lang))
     if await _caption_wanted(user_id):
-        caption += "\n\n" + html.escape(i18n.t(lang, "download_credit_caption", username=BOT_USERNAME))
-    return caption
+        parts.append(html.escape(i18n.t(lang, "download_credit_caption", username=BOT_USERNAME)))
+    return "\n\n".join(parts) or None
+
+# /disclaimer: the copyright note under files can be turned off for one chat -- by the person in their own
+# chat, by an admin in a group -- only from a message that shows the note in full and says who is
+# responsible, and only with a tap on its "Yes" button. Kept: which chat, who confirmed, and when.
+NOTE_PREFIX = "note:"
+
+async def _may_change_note(bot, chat, user, sender_chat=None) -> bool:
+    if chat.type not in GROUP_TYPES:
+        return True
+    if sender_chat is not None and sender_chat.id == chat.id:
+        return True  # an anonymous admin, writing as the group
+    if user is None:
+        return False
+    try:
+        member = await bot.get_chat_member(chat.id, user.id)
+    except Exception:
+        return False
+    return member.status in ("administrator", "creator")
+
+async def _note_screen(chat, lang: str, may_change: bool):
+    off_since = await asyncio.to_thread(get_copyright_note_off, chat.id)
+    group = chat.type in GROUP_TYPES
+    if off_since is None:
+        text = i18n.t(lang, "note_on_group" if group else "note_on", note=_copyright_note(lang))
+        rows = [[InlineKeyboardButton(i18n.t(lang, "note_button_off"), callback_data=NOTE_PREFIX + "off"),
+                 InlineKeyboardButton(i18n.t(lang, "note_button_keep"), callback_data=NOTE_PREFIX + "keep")]]
+    else:
+        text = i18n.t(lang, "note_off_group" if group else "note_off", since=html.escape(off_since[:10]))
+        rows = [[InlineKeyboardButton(i18n.t(lang, "note_button_on"), callback_data=NOTE_PREFIX + "on")]]
+    if not may_change:
+        return text + "\n\n" + i18n.t(lang, "note_admins_only"), None
+    return text, InlineKeyboardMarkup(rows)
+
+async def disclaimer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user, chat, message = update.effective_user, update.effective_chat, update.effective_message
+    lang = await i18n.get_lang(user.id, context) if user is not None else "en"
+    may_change = await _may_change_note(context.bot, chat, user, getattr(message, "sender_chat", None))
+    text, markup = await _note_screen(chat, lang, may_change)
+    await context.bot.send_message(chat.id, text, parse_mode=ParseMode.HTML, reply_markup=markup, **NO_PREVIEW)
+
+async def note_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query, user = update.callback_query, update.effective_user
+    chat = query.message.chat
+    lang = await i18n.get_lang(user.id, context)
+    choice = query.data[len(NOTE_PREFIX):]
+    if choice != "show" and not await _may_change_note(context.bot, chat, user):
+        await query.answer(i18n.t(lang, "note_admins_only"), show_alert=True)
+        return
+    if choice == "keep":
+        await query.answer(i18n.t(lang, "note_kept"))
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except BadRequest:
+            pass
+        return
+    if choice in ("off", "on"):
+        await asyncio.to_thread(set_copyright_note_off, chat.id, user.id, choice == "off")
+        await query.answer(i18n.t(lang, "note_turned_off" if choice == "off" else "note_turned_on"))
+    else:
+        await query.answer()
+    text, markup = await _note_screen(chat, lang, True)
+    await edit_in_place(query.message, context.bot, text, parse_mode=ParseMode.HTML, reply_markup=markup,
+                        **NO_PREVIEW)
 
 async def _send_media(update, context, items_with_paths, lang,
                       lossless: bool | None = None, redeliver_token: str | None = None,
                       probing: "video.ProbeRun | None" = None,
                       title: "str | None" = None, duration: "int | None" = None) -> "list[tuple[str, str]] | None":
     """Put what was resolved into the chat."""
-    caption = await _media_caption(update.effective_user.id, lang)
+    caption = await _media_caption(update.effective_user.id, lang, update.effective_chat.id)
     if lossless is None:
         lossless = await _lossless_wanted(update.effective_user.id)
     if probing is None:
@@ -5472,7 +5558,7 @@ async def _large_download(update, context, status, lang, platform: str, url: str
 
 async def _send_large(update, context, items_with_paths, lang) -> None:
     """What a large download fetched: anything over the Bot API's 50 MB goes over MTProto as a file, the rest as usual, one by one."""
-    caption = await _media_caption(update.effective_user.id, lang)
+    caption = await _media_caption(update.effective_user.id, lang, update.effective_chat.id)
     probing = video.ProbeRun()
     for item, path in items_with_paths:
         if os.path.getsize(path) > large_files.BOT_API_SEND_BYTES:
@@ -5817,6 +5903,8 @@ async def group_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if user is not None:
                 shared_features.note_active(context, user)
             await _group_hello(update, context)
+        elif command == "disclaimer":
+            await disclaimer_command(update, context)
         elif command is None and user is not None and not user.is_bot and _group_link(update):
             # Counted as having used the bot only for the link it serves them.
             shared_features.note_active(context, user)
@@ -5836,7 +5924,8 @@ async def group_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def bot_membership_changed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Added to a group: say hello and what it needs. Nothing is kept about a group."""
+    """Added to a group: say hello and what it needs. Nothing is kept about a group but whether
+    its admins turned the copyright note off (/disclaimer)."""
     change = update.my_chat_member
     if change is None or change.chat.type not in GROUP_TYPES:
         return
@@ -5846,11 +5935,12 @@ async def bot_membership_changed(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def _publish_group_menu(application) -> None:
-    """In groups the menu offers /help only: the private chat's commands do nothing there."""
+    """In groups the menu offers /help and /disclaimer only: the private chat's commands do nothing there."""
     for language in (None,) + tuple(i18n.SUPPORTED_LANGUAGES):
         try:
             await application.bot.set_my_commands(
-                [BotCommand("help", i18n.t(language or "en", "group_cmd_help"))],
+                [BotCommand("help", i18n.t(language or "en", "group_cmd_help")),
+                 BotCommand("disclaimer", i18n.t(language or "en", "group_cmd_disclaimer"))],
                 scope=BotCommandScopeAllGroupChats(), language_code=language)
         except Exception:
             logger.debug("Could not publish the group menu (%s)", language or "default", exc_info=True)
@@ -5974,6 +6064,8 @@ def main():
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("caption", caption_toggle))
     app.add_handler(CommandHandler("lossless", lossless_toggle))
+    app.add_handler(CommandHandler("disclaimer", disclaimer_command))
+    app.add_handler(CallbackQueryHandler(note_callback, pattern="^" + NOTE_PREFIX))
     app.add_handler(CommandHandler("dbdump", dbdump_command))
     app.add_handler(CommandHandler("messageas", messageas_command))
     app.add_handler(CommandHandler("status", status_command))
@@ -6041,6 +6133,7 @@ import asyncio
 import html
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
@@ -6080,6 +6173,8 @@ from live_message import LiveMessage, edit_in_place
 from anon_logic import (
     REACTION_NOTE_SECONDS,
     RELAYABLE_REACTIONS,
+    EditTooLong,
+    edit_relayed,
     message_allowed,
     new_conversation_allowed,
     pick_reaction,
@@ -6099,6 +6194,8 @@ from db import (
     get_anon_stats,
     get_conversation,
     get_conversation_for_relay,
+    get_edit_route,
+    forget_anon_relays,
     get_reaction_route,
     get_relay_row,
     get_routing_context,
@@ -6210,6 +6307,8 @@ def build_help_text(lang: str, full: bool = False) -> str:
         text = i18n.t(lang, "help_brief").rstrip("\n")
     else:
         text = i18n.t(lang, "help_text", reactions=" ".join(RELAYABLE_REACTIONS)).rstrip("\n")
+        if _edits_cache["mode"] == "everyone":
+            text += "\n\n" + i18n.t(lang, "help_edits")
     blurb = sibling_bots_blurb(BOT_NAME, lang)
     return text + "\n\n" + blurb if blurb else text
 
@@ -6246,7 +6345,43 @@ ADMIN_COMMANDS = [
     BotCommand("status", "🔒 Uptime, host, errors, active users"),
     BotCommand("messageas", "🔒 messageas <user_id> <text> — DM as this bot"),
     BotCommand("dbdump", "🔒 This bot's tables as a zip of CSVs"),
+    BotCommand("editing", "🔒 Who may edit and delete relayed messages"),
 ]
+
+DELETE_COMMAND = BotCommand("delete", "Delete a message on both sides — reply to it")
+
+# Edits and /delete (2.2.1): who may carry an edit or a deletion over to the other side. A family setting
+# the operator flips with /editing, no redeploy: "everyone" (what a missing or unreadable setting means,
+# since the channel's poll of 2026-11-23 said yes), "admins" (ABOT_ADMIN_ID only), or "off". Whoever
+# it leaves out keeps the old answer to an edit.
+EDITS_SETTING = "anon:edits"
+EDITS_DEFAULT = "everyone"
+EDITS_MODES = ("admins", "everyone", "off")
+EDITS_REFRESH_SECONDS = 60
+_edits_cache: dict = {"at": None, "mode": EDITS_DEFAULT}
+
+def _edits_mode(fresh: bool = False) -> str:
+    """Blocking."""
+    at = _edits_cache["at"]
+    if not fresh and at is not None and time.monotonic() - at < EDITS_REFRESH_SECONDS:
+        return _edits_cache["mode"]
+    mode = family_link.get_setting(EDITS_SETTING, EDITS_DEFAULT)
+    if mode not in EDITS_MODES:
+        mode = EDITS_DEFAULT
+    _edits_cache.update(at=time.monotonic(), mode=mode)
+    return mode
+
+async def _edits_allowed(user_id: int) -> bool:
+    mode = await asyncio.to_thread(_edits_mode)
+    return mode == "everyone" or (mode == "admins" and _is_admin(user_id))
+
+def _menus(mode: str):
+    """(public menu, admin-only additions) for this edits mode."""
+    if mode == "everyone":
+        return BOT_COMMANDS + [DELETE_COMMAND], ADMIN_COMMANDS
+    if mode == "admins":
+        return BOT_COMMANDS, ADMIN_COMMANDS + [DELETE_COMMAND]
+    return BOT_COMMANDS, ADMIN_COMMANDS
 
 def _link_url(token: str) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=q_{token}"
@@ -7142,10 +7277,65 @@ async def cancel_choice_callback(update: Update, context: ContextTypes.DEFAULT_T
             stopped.append(item.label)
     await finish_cancel_choice(update, context, lang, stopped)
 
+def _twin_dressing(route: dict, to_owner: bool, lang: str):
+    """The header and buttons a relayed message carries on the recipient's side."""
+    if to_owner:
+        return (i18n.t(lang, "incoming_header", conv_number=route["conv_number"]),
+                _incoming_keyboard(route["conversation_id"], lang))
+    return i18n.t(lang, "incoming_header_follower"), _follower_keyboard(route["conversation_id"], lang)
+
+async def _relay_edit(context, edited, user_id: int) -> "str | None":
+    """Carry an edit over to the other side. The answer to give, or None to say nothing (not a relayed
+    message, nothing changed, or a blocked guest).
+
+    The relay row does not say whether the twin was an album's later item (sent without header and
+    buttons); every twin is rebuilt with them."""
+    route = await asyncio.to_thread(get_edit_route, edited.chat_id, edited.message_id)
+    if route is None or user_id not in (route["owner_user_id"], route["follower_user_id"]):
+        return None
+    to_owner = user_id != route["owner_user_id"]
+    if to_owner and route["blocked"]:
+        return None
+    if len(route["twins"]) != 1:
+        return "edit_not_relayed_parts" if route["twins"] else None
+    recipient = route["owner_user_id"] if to_owner else route["follower_user_id"]
+    their_lang = await asyncio.to_thread(get_user_language, recipient) or "en"
+    header, keyboard = _twin_dressing(route, to_owner, their_lang)
+    try:
+        await edit_relayed(context.bot, edited, recipient, route["twins"][0], header=header,
+                           reply_markup=keyboard)
+    except EditTooLong:
+        return "edit_not_relayed_parts"
+    except Forbidden:
+        return "edit_not_relayed"
+    except BadRequest as exc:
+        if "not modified" in str(exc).lower():
+            return None
+        logger.info("An edit could not be carried over: %s", exc)
+        return "edit_not_relayed"
+    note_stat("anon_relay", "edit")
+    return "edit_relayed"
+
 async def edited_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Editing a message that has already been relayed changes nothing on the other side, and saying nothing let people believe it had."""
+    """Editing a message that has already been relayed changes nothing on the other side, and saying nothing let people believe it had.
+    For whoever /editing allows, the edit is carried over instead."""
     edited = update.edited_message
     try:
+        user = update.effective_user
+        if update.effective_chat.type == "private" and user is not None and await _edits_allowed(user.id):
+            lang = await i18n.get_lang(user.id, context)
+            wait = message_allowed(user.id)
+            if wait:
+                await edited.reply_text(i18n.t(lang, "too_fast", seconds=wait))
+                return
+            if await _refuse_if_updating(edited, lang, user.id, edited.chat_id):
+                return
+            answer = await _relay_edit(context, edited, user.id)
+            if answer == "edit_relayed":
+                await _show_briefly(context, edited.chat_id, i18n.t(lang, answer))
+            elif answer is not None:
+                await edited.reply_text(i18n.t(lang, answer))
+            return
         conversation_id = await asyncio.to_thread(
             get_conversation_for_relay, update.effective_chat.id, edited.message_id
         )
@@ -7157,6 +7347,111 @@ async def edited_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Could not answer an edited message")
     finally:
         raise ApplicationHandlerStop
+
+async def _delete_twins(bot, chat_id: int, twins) -> "str | None":
+    """Delete the bot's copies in the other chat. None when done (a copy already gone counts as done),
+    otherwise the answer to give."""
+    for twin in twins:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=twin)
+        except Forbidden:
+            return "delete_failed"
+        except BadRequest as exc:
+            reason = str(exc).lower()
+            if "not found" in reason:
+                continue
+            return "delete_too_old" if "can't be deleted" in reason or "cant be deleted" in reason else "delete_failed"
+    return None
+
+async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/delete, sent as a reply to one's own message: deletes it on both sides. Telegram tells a bot nothing
+    when a message is deleted in its chat, so this is the only way. Only for whoever /editing allows;
+    to everybody else it does not exist."""
+    user, message = update.effective_user, update.message
+    if message is None or update.effective_chat.type != "private" or not await _edits_allowed(user.id):
+        return await _deny(update, context)
+    lang = await i18n.get_lang(user.id, context)
+    target = message.reply_to_message
+    if target is None:
+        await message.reply_text(i18n.t(lang, "delete_how"))
+        return
+    if target.from_user is None or target.from_user.id != user.id:
+        await message.reply_text(i18n.t(lang, "delete_only_own"))
+        return
+    if await _refuse_if_updating(message, lang, user.id, message.chat_id):
+        return
+    route = await asyncio.to_thread(get_edit_route, message.chat_id, target.message_id)
+    if (route is None or not route["twins"]
+            or user.id not in (route["owner_user_id"], route["follower_user_id"])):
+        await message.reply_text(i18n.t(lang, "delete_not_relayed"))
+        return
+    to_owner = user.id != route["owner_user_id"]
+    if to_owner and route["blocked"]:
+        await message.reply_text(i18n.t(lang, "delete_failed"))
+        return
+    recipient = route["owner_user_id"] if to_owner else route["follower_user_id"]
+    problem = await _delete_twins(context.bot, recipient, route["twins"])
+    if problem:
+        await message.reply_text(i18n.t(lang, problem))
+        return
+    await asyncio.to_thread(forget_anon_relays, recipient, route["twins"])
+    await asyncio.to_thread(forget_anon_relays, message.chat_id, [target.message_id])
+    for mine in (target.message_id, message.message_id):
+        try:
+            await context.bot.delete_message(chat_id=message.chat_id, message_id=mine)
+        except Exception:
+            logger.debug("Could not delete the sender's own copy", exc_info=True)
+    note_stat("anon_relay", "delete")
+    if to_owner:
+        # The owner keeps a line in its place, with the buttons, so the guest can still be blocked.
+        their_lang = await asyncio.to_thread(get_user_language, recipient) or "en"
+        header, keyboard = _twin_dressing(route, True, their_lang)
+        try:
+            marker = await context.bot.send_message(
+                chat_id=recipient, text=header + "\n\n" + i18n.t(their_lang, "delete_marker"),
+                reply_markup=keyboard, disable_notification=True)
+            await asyncio.to_thread(record_anon_relays, recipient, [marker.message_id],
+                                    route["conversation_id"])
+        except Exception:
+            logger.debug("Could not leave the deletion note", exc_info=True)
+    await _show_briefly(context, message.chat_id, i18n.t(lang, "deleted_both"))
+
+def _editing_text(mode: str) -> str:
+    return ("✏️ Edits and /delete are carried over for: " + {
+        "admins": "the admin account(s) only (ABOT_ADMIN_ID)",
+        "everyone": "everyone",
+        "off": "nobody",
+    }[mode] + ".\n\nEveryone else is told that an edit did not reach the other side, and /delete does "
+             "not exist for them. A change takes effect within a minute.")
+
+def _editing_keyboard(mode: str) -> InlineKeyboardMarkup:
+    labels = {"admins": "Admins only", "everyone": "Everyone", "off": "Off"}
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(("✅ " if mode == m else "") + labels[m], callback_data=f"aq_edits:{m}")
+        for m in EDITS_MODES]])
+
+async def editing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/editing -- the admin's switch for who may edit and delete relayed messages."""
+    if not _is_admin(update.effective_user.id):
+        return await _deny(update, context)
+    mode = await asyncio.to_thread(_edits_mode, True)
+    await update.message.reply_text(_editing_text(mode), reply_markup=_editing_keyboard(mode))
+
+async def editing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _is_admin(update.effective_user.id):
+        await query.answer()
+        return
+    mode = query.data.split(":", 1)[1]
+    if mode not in EDITS_MODES:
+        await query.answer()
+        return
+    await asyncio.to_thread(family_link.set_setting, EDITS_SETTING, mode)
+    mode = await asyncio.to_thread(_edits_mode, True)
+    await query.answer("Saved.")
+    public, admin_only = _menus(mode)
+    await publish_commands(context.application, public, admin_only, ADMIN_IDS)
+    await edit_in_place(query.message, context.bot, _editing_text(mode), reply_markup=_editing_keyboard(mode))
 
 async def relay_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Somebody reacted to a bubble of a conversation: the bot puts the same reaction on its twin in the other chat, where it shows beside the bot's picture rather than theirs."""
@@ -7387,7 +7682,8 @@ async def _post_init(application):
     await tune_runtime(application)
 
     await lifecycle.on_start(BOT_NAME)
-    await publish_commands(application, BOT_COMMANDS, ADMIN_COMMANDS, ADMIN_IDS)
+    public, admin_only = _menus(await asyncio.to_thread(_edits_mode, True))
+    await publish_commands(application, public, admin_only, ADMIN_IDS)
     await publish_profile(application)
 
 async def _post_stop(application):
@@ -7440,6 +7736,9 @@ def main():
     app.add_handler(CommandHandler("dbdump", dbdump_command))
     app.add_handler(CommandHandler("messageas", messageas_command))
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("editing", editing_command))
+    app.add_handler(CallbackQueryHandler(editing_callback, pattern=r"^aq_edits:"))
+    app.add_handler(CommandHandler("delete", delete_command))
 
     app.add_handler(CommandHandler("language", language_command))
     app.add_handler(CommandHandler("en", set_language_en))

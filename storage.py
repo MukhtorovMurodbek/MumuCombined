@@ -1315,6 +1315,18 @@ def init_db(dsn: str = DATABASE_URL) -> None:
 
         if _column(conn, "settings", "large_files_enabled") is None:
             conn.execute("ALTER TABLE settings ADD COLUMN IF NOT EXISTS large_files_enabled INTEGER NOT NULL DEFAULT 0")
+
+        # Chats (private or group) that turned the copyright note off, who confirmed it and when: kept
+        # apart from `settings`, whose ids are people the bot may message unprompted.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS copyright_note_off (
+                chat_id BIGINT PRIMARY KEY,
+                turned_off_by BIGINT NOT NULL,
+                turned_off_at TEXT NOT NULL
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS star_transactions (
@@ -1480,6 +1492,27 @@ def set_lossless_enabled(user_id: int, enabled: bool) -> None:
             """,
             (user_id, int(enabled)),
         )
+        conn.commit()
+
+def get_copyright_note_off(chat_id: int) -> "str | None":
+    """When this chat turned the copyright note off (ISO time), or None while it is on."""
+    with pooled_read() as conn:
+        row = conn.execute("SELECT turned_off_at FROM copyright_note_off WHERE chat_id = %s",
+                           (chat_id,)).fetchone()
+        return row[0] if row else None
+
+def set_copyright_note_off(chat_id: int, user_id: int, off: bool) -> None:
+    """Turn the note off for `chat_id`, confirmed by `user_id`; or back on."""
+    with pooled() as conn:
+        if off:
+            conn.execute(
+                "INSERT INTO copyright_note_off (chat_id, turned_off_by, turned_off_at) VALUES (%s, %s, %s) "
+                "ON CONFLICT (chat_id) DO UPDATE SET turned_off_by = excluded.turned_off_by, "
+                "turned_off_at = excluded.turned_off_at",
+                (chat_id, user_id, datetime.now(timezone.utc).isoformat()),
+            )
+        else:
+            conn.execute("DELETE FROM copyright_note_off WHERE chat_id = %s", (chat_id,))
         conn.commit()
 
 def get_large_files_enabled(user_id: int) -> bool:
@@ -1788,6 +1821,9 @@ def erase_user(user_id: int) -> int:
         for table in ("settings", "donation_prompts", "activity_events", "download_events"):
             cur = conn.execute(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
             removed += cur.rowcount or 0
+        cur = conn.execute("DELETE FROM copyright_note_off WHERE chat_id = %s OR turned_off_by = %s",
+                           (user_id, user_id))
+        removed += cur.rowcount or 0
         conn.execute(
             "UPDATE star_transactions SET username = NULL "
             "WHERE user_id = %s AND username IS NOT NULL",
@@ -2324,6 +2360,50 @@ def get_reaction_route(chat_id: int, message_id: int) -> "dict | None":
     return {"peer_message_id": int(row[0]), "conversation_id": int(row[1]),
             "owner_user_id": owner, "follower_user_id": follower,
             "blocked": bool(row[4])}
+
+def get_edit_route(chat_id: int, message_id: int) -> "dict | None":
+    """Where an edit or a deletion of this message goes: its twins (the bot's copies of it in the other
+    chat, oldest first), the conversation and both sides, and whether the guest is blocked."""
+    with pooled_read() as conn:
+        row = conn.execute(
+            """
+            SELECT c.id, c.conv_number, c.owner_user_id, c.follower_user_id,
+                   EXISTS (SELECT 1 FROM anon_blocks b
+                           WHERE b.owner_user_id = c.owner_user_id
+                             AND b.follower_user_id = c.follower_user_id),
+                   c.owner_sealed, c.follower_sealed,
+                   ARRAY(SELECT t.message_id FROM anon_relay t
+                         WHERE t.conversation_id = r.conversation_id
+                           AND t.peer_message_id = r.message_id
+                           AND t.chat_id <> r.chat_id
+                         ORDER BY t.message_id)
+            FROM anon_relay r
+            JOIN anon_conversations c ON c.id = r.conversation_id
+            WHERE r.chat_id = %s AND r.message_id = %s
+            """,
+            (vault.pseudonym(chat_id), message_id),
+        ).fetchone()
+    if row is None:
+        return None
+    owner = _open_id("anon_conversations", row[0], row[5], "anon.conversation.owner", row[2])
+    follower = _open_id("anon_conversations", row[0], row[6], "anon.conversation.follower", row[3])
+    if owner is None or follower is None:
+        return None
+    return {"conversation_id": int(row[0]), "conv_number": row[1],
+            "owner_user_id": owner, "follower_user_id": follower,
+            "blocked": bool(row[4]), "twins": [int(m) for m in row[7] or ()]}
+
+def forget_anon_relays(chat_id: int, message_ids) -> None:
+    """Drop the relay rows of messages that were deleted."""
+    ids = list(message_ids)
+    if not ids:
+        return
+    with pooled() as conn:
+        conn.execute(
+            "DELETE FROM anon_relay WHERE chat_id = %s AND message_id = ANY(%s::bigint[])",
+            (vault.pseudonym(chat_id), ids),
+        )
+        conn.commit()
 
 def record_star_invoice(
     user_id: int,
