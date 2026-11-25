@@ -10361,7 +10361,7 @@ Example: /gift all welcome-200 200 2027-01-15
 def _help_page_promo() -> str:
     amount = family_link.PROMO_CREDITS
     users = family_link.PROMO_USERS
-    claim_days = family_link.PROMO_CLAIM_DAYS
+    claim_last_day = family_link.promo_spend_by()
     minutes = PROMO_COUNT_SECONDS // 60
     return f"""🎉 /promo — the {amount} ⚡ gift for everyone who writes to ConvertBot or DownloaderBot
 
@@ -10377,7 +10377,7 @@ What /promo shows depends on where the gift stands:
 • Started: when it started, when claiming closes, how many people claimed it, and how many people AnonBot showed the ad to.
 
 Once started:
-• Claiming stays open for {claim_days} days: until midnight UTC at the end of the {claim_days}th day after the start.
+• Claiming stays open until the end of {claim_last_day} (midnight UTC), whenever the gift was started.
 • The first message a person sends to ConvertBot or DownloaderBot in that time gives them {amount} ⚡ of bonus credit, once in all, not once per bot. They are told in their own language.
 • Every gift can be spent until {family_link.promo_spend_by()}, whenever it was claimed. What is left then disappears at the end of that day, UTC.
 • AnonBot shows the ad once to each person who writes to it and does not have the gift yet: not on the first /start of an inbox link, not in the middle of a question, and not again after a restart.

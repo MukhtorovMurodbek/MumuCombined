@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 FAMILY_SCHEMA = "family"
 
-VERSION = os.environ.get("FAMILY_VERSION", "2.2.1")
+VERSION = os.environ.get("FAMILY_VERSION", "2.2.2")
 
 _REPORTS_BECAME_AUTOMATIC = datetime(2026, 9, 13, tzinfo=timezone.utc)
 
@@ -1950,11 +1950,11 @@ async def _cmd_gift(context, args):
     return out, None, None
 
 PROMO_KEY = "gift-220-users"
-PROMO_USERS = 200
+PROMO_USERS = 220
 PROMO_CREDITS = 220
 PROMO_CLAIM_DAYS = 3
 PROMO_SPEND_DAYS = 28
-PROMO_SPEND_UNTIL = datetime(2026, 12, 2, tzinfo=timezone.utc)
+PROMO_SPEND_UNTIL = datetime(2026, 12, 1, tzinfo=timezone.utc)
 PROMO_STARTED = f"promo:{PROMO_KEY}:started"
 PROMO_STOPPED = f"promo:{PROMO_KEY}:stopped"
 PROMO_MILESTONE = f"promo:{PROMO_KEY}:milestone"
@@ -2011,8 +2011,10 @@ def _read_promo(fresh: bool = False) -> tuple:
     return started, stopped
 
 def promo_closes_for(started: datetime) -> datetime:
-    """When claiming ends for a gift started at `started`, unless it is stopped first: the end of the PROMO_CLAIM_DAYS-th day after the start (UTC)."""
-    return _end_of_day((started.astimezone(timezone.utc) + timedelta(days=PROMO_CLAIM_DAYS)).date())
+    """When claiming ends, unless it is stopped first. Since 2.2.2 (2026-11-25, the operator: "until start of
+    december 1") claiming stays open until the gift runs out, PROMO_SPEND_UNTIL, whenever it was started;
+    PROMO_CLAIM_DAYS is no longer used for it."""
+    return PROMO_SPEND_UNTIL
 
 def promo_window(fresh: bool = False) -> "tuple[datetime, datetime] | None":
     """(started, closes) once the owner has started the gift, else None."""
@@ -2033,7 +2035,7 @@ def promo_open(now: "datetime | None" = None, fresh: bool = False) -> bool:
     return window[0] <= now < window[1]
 
 def promo_expiry(claimed_at: datetime) -> datetime:
-    """When a gift claimed at `claimed_at` runs out. Since 2026-11-18 every gift runs out at the same moment, PROMO_SPEND_UNTIL (the end of 1 December 2026, UTC), whenever it was claimed; PROMO_SPEND_DAYS is no longer used for it."""
+    """When a gift claimed at `claimed_at` runs out. Since 2026-11-18 every gift runs out at the same moment, PROMO_SPEND_UNTIL (since 2.2.2 the start of 1 December 2026, UTC), whenever it was claimed; PROMO_SPEND_DAYS is no longer used for it."""
     return PROMO_SPEND_UNTIL
 
 def promo_spend_by() -> str:
